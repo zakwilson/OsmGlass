@@ -16,4 +16,11 @@
     <string name="mode_cycling">Cycle</string>
     <string name="mode_walking">Walk</string>
     <string name="mode_driving">Drive</string>
+    <string name="history_title">Recent destinations</string>
+    <string name="history_clear">Clear</string>
+    <string name="history_remove">Remove</string>
+    <string name="history_clear_confirm_title">Clear history?</string>
+    <string name="history_clear_confirm_message">Remove all recent destinations? This cannot be undone.</string>
+    <string name="history_clear_confirm_ok">Clear</string>
+    <string name="cancel">Cancel</string>
 </resources>

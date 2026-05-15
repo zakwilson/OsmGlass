@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.lifecycleScope
@@ -28,19 +29,39 @@ class SearchFragment : Fragment(R.layout.fragment_search) {
     private val client = GeocodingClient()
     private var query: String = ""
     private var debounce: Job? = null
-    private lateinit var adapter: SearchResultsAdapter
+    private lateinit var resultsAdapter: SearchResultsAdapter
+    private lateinit var historyAdapter: DestinationHistoryAdapter
+    private lateinit var history: DestinationHistoryStore
+    private lateinit var results: RecyclerView
+    private lateinit var progress: ProgressBar
+    private lateinit var status: TextView
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         val input = view.findViewById<TextInputEditText>(R.id.search_input)
-        val results = view.findViewById<RecyclerView>(R.id.results)
-        val progress = view.findViewById<ProgressBar>(R.id.progress)
-        val status = view.findViewById<TextView>(R.id.status)
+        results = view.findViewById(R.id.results)
+        progress = view.findViewById(R.id.progress)
+        status = view.findViewById(R.id.status)
 
-        adapter = SearchResultsAdapter { place ->
+        history = DestinationHistoryStore(requireContext())
+
+        resultsAdapter = SearchResultsAdapter { place ->
+            history.add(place)
             viewModel.pickDestination(place, origin = null)
         }
+        historyAdapter = DestinationHistoryAdapter(
+            onPick = { place ->
+                history.add(place)
+                viewModel.pickDestination(place, origin = null)
+            },
+            onRemove = { place ->
+                history.remove(place)
+                refreshHistory()
+            },
+            onClear = { confirmClearHistory() },
+        )
         results.layoutManager = LinearLayoutManager(requireContext())
-        results.adapter = adapter
+
+        showHistory()
 
         input.addTextChangedListener(object : TextWatcher {
             override fun afterTextChanged(s: Editable?) {
@@ -49,11 +70,14 @@ class SearchFragment : Fragment(R.layout.fragment_search) {
                 if (query.isEmpty()) {
                     progress.visibility = View.GONE
                     status.visibility = View.GONE
-                    adapter.submit(emptyList())
+                    showHistory()
                     return
                 }
                 progress.visibility = View.VISIBLE
                 status.visibility = View.GONE
+                if (results.adapter !== resultsAdapter) {
+                    results.adapter = resultsAdapter
+                }
                 debounce = viewLifecycleOwner.lifecycleScope.launch {
                     delay(350)
                     val q = query
@@ -63,7 +87,7 @@ class SearchFragment : Fragment(R.layout.fragment_search) {
                         progress.visibility = View.GONE
                         status.text = getString(R.string.search_error, t.message ?: "?")
                         status.visibility = View.VISIBLE
-                        adapter.submit(emptyList())
+                        resultsAdapter.submit(emptyList())
                         return@launch
                     }
                     progress.visibility = View.GONE
@@ -73,13 +97,41 @@ class SearchFragment : Fragment(R.layout.fragment_search) {
                     } else {
                         status.visibility = View.GONE
                     }
-                    adapter.submit(res)
+                    resultsAdapter.submit(res)
                 }
             }
 
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
         })
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (query.isEmpty()) refreshHistory()
+    }
+
+    private fun showHistory() {
+        if (results.adapter !== historyAdapter) {
+            results.adapter = historyAdapter
+        }
+        refreshHistory()
+    }
+
+    private fun refreshHistory() {
+        historyAdapter.submit(history.list())
+    }
+
+    private fun confirmClearHistory() {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.history_clear_confirm_title)
+            .setMessage(R.string.history_clear_confirm_message)
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.history_clear_confirm_ok) { _, _ ->
+                history.clear()
+                refreshHistory()
+            }
+            .show()
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
