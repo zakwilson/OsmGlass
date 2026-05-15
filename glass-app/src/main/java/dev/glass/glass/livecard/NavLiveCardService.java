@@ -2,8 +2,10 @@ package dev.glass.glass.livecard;
 
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.Log;
@@ -32,6 +34,8 @@ public class NavLiveCardService extends Service {
     private Transport transport;
     private PowerManager.WakeLock screenWake;
     private int approachingTurnIndex = -1;
+    private boolean hasNavContent = false;
+    private BroadcastReceiver screenOnReceiver;
 
     @Override
     public void onCreate() {
@@ -64,6 +68,23 @@ public class NavLiveCardService extends Service {
             Log.w(TAG, "LiveCard publish failed (likely emulator): " + t.getMessage());
             liveCard = null;
         }
+        // Glass's head-wake gesture (and a touchpad tap) turn the screen on, which fires
+        // ACTION_SCREEN_ON. When that happens during an active route, surface the map LiveCard
+        // so a glance-up brings the user straight to nav instead of the clock/timeline home.
+        // ACTION_SCREEN_ON is only delivered to runtime-registered receivers, not manifest ones.
+        screenOnReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (!hasNavContent || liveCard == null) return;
+                try {
+                    liveCard.navigate();
+                } catch (Throwable t) {
+                    Log.w(TAG, "liveCard.navigate on screen-on failed: " + t.getMessage());
+                }
+            }
+        };
+        registerReceiver(screenOnReceiver, new IntentFilter(Intent.ACTION_SCREEN_ON));
+
         // Start the transport (TCP server in debug, RFCOMM in release).
         transport = TransportFactory.create();
         transport.setListener(new PacketDispatcher(this));
@@ -82,8 +103,12 @@ public class NavLiveCardService extends Service {
             android.graphics.Bitmap bm = android.graphics.BitmapFactory
                 .decodeByteArray(pngBytes, 0, pngBytes.length);
             if (bm != null) views.setImageViewBitmap(R.id.snippet, bm);
+            hasNavContent = true;
         }
-        if (instruction != null) views.setTextViewText(R.id.instruction, instruction);
+        if (instruction != null) {
+            views.setTextViewText(R.id.instruction, instruction);
+            hasNavContent = true;
+        }
         if (distance != null) views.setTextViewText(R.id.distance, distance);
         if (liveCard != null) {
             try {
@@ -145,11 +170,16 @@ public class NavLiveCardService extends Service {
     @Override
     public void onDestroy() {
         Log.i(TAG, "onDestroy");
+        if (screenOnReceiver != null) {
+            try { unregisterReceiver(screenOnReceiver); } catch (Throwable ignored) {}
+            screenOnReceiver = null;
+        }
         if (screenWake != null) {
             try { if (screenWake.isHeld()) screenWake.release(); } catch (Throwable ignored) {}
             screenWake = null;
         }
         approachingTurnIndex = -1;
+        hasNavContent = false;
         if (transport != null) {
             try { transport.stop(); } catch (Throwable ignored) {}
             transport = null;
