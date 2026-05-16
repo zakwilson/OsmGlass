@@ -21,11 +21,15 @@ public final class PacketDispatcher implements Transport.Listener {
 
     /** Distance at which we consider the rider to be "approaching" a turn (see PLAN.md §MVP-flow). */
     private static final int APPROACH_THRESHOLD_M = 150;
+    /** Distance at which we speak the "turn now" cue. */
+    private static final int IMMINENT_THRESHOLD_M = 30;
 
     private final NavLiveCardService service;
     private final Map<Long, Packet.TurnBundle> cache = new HashMap<>();
     private long currentRouteId = -1;
     private int activeTurnIndex = -1;
+    private int lastApproachSpokenTurn = -1;
+    private int lastImminentSpokenTurn = -1;
 
     public PacketDispatcher(NavLiveCardService service) {
         this.service = service;
@@ -42,6 +46,8 @@ public final class PacketDispatcher implements Transport.Listener {
             Log.i(TAG, "ROUTE_START id=" + rs.routeId + " turns=" + rs.totalTurns);
             currentRouteId = rs.routeId;
             cache.clear();
+            lastApproachSpokenTurn = -1;
+            lastImminentSpokenTurn = -1;
         } else if (p instanceof Packet.TurnBundle) {
             Packet.TurnBundle tb = (Packet.TurnBundle) p;
             Log.d(TAG, "TURN_BUNDLE #" + tb.turnIndex + " " + tb.kind + " (" + tb.pngBytes.length + "B)");
@@ -62,6 +68,18 @@ public final class PacketDispatcher implements Transport.Listener {
             if (pr.distanceToTurnM <= APPROACH_THRESHOLD_M) {
                 service.onApproachingTurn(pr.turnIndex);
                 activeTurnIndex = pr.turnIndex;
+                if (lastApproachSpokenTurn != pr.turnIndex) {
+                    lastApproachSpokenTurn = pr.turnIndex;
+                    service.speak(
+                        TtsSpeaker.utteranceFor(TtsSpeaker.Cue.APPROACH, tb.kind, tb.instructionText, APPROACH_THRESHOLD_M),
+                        "approach-" + pr.turnIndex);
+                }
+            }
+            if (pr.distanceToTurnM <= IMMINENT_THRESHOLD_M && lastImminentSpokenTurn != pr.turnIndex) {
+                lastImminentSpokenTurn = pr.turnIndex;
+                service.speak(
+                    TtsSpeaker.utteranceFor(TtsSpeaker.Cue.IMMINENT, tb.kind, tb.instructionText, IMMINENT_THRESHOLD_M),
+                    "imminent-" + pr.turnIndex);
             }
             String distance = formatDistance(pr.distanceToTurnM);
             String instruction = tb.instructionText;
@@ -72,6 +90,8 @@ public final class PacketDispatcher implements Transport.Listener {
             Log.i(TAG, "ROUTE_END id=" + re.routeId + " " + re.reason);
             service.onTurnPassed();
             activeTurnIndex = -1;
+            lastApproachSpokenTurn = -1;
+            lastImminentSpokenTurn = -1;
             String message = (re.reason == Packet.RouteEnd.Reason.OFFROUTE) ? "Rerouting…" : "Done";
             service.updateRemoteViews(null, message, "");
             cache.clear();
@@ -83,6 +103,8 @@ public final class PacketDispatcher implements Transport.Listener {
         Log.w(TAG, "disconnected: " + (cause == null ? "clean EOF" : cause.getMessage()));
         service.onTurnPassed();
         activeTurnIndex = -1;
+        lastApproachSpokenTurn = -1;
+        lastImminentSpokenTurn = -1;
         service.updateRemoteViews(null, "Phone disconnected", "");
     }
 

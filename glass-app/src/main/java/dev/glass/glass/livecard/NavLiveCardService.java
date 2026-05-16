@@ -32,6 +32,7 @@ public class NavLiveCardService extends Service {
     private LiveCard liveCard;
     private RemoteViews views;
     private Transport transport;
+    private TtsSpeaker speaker;
     private PowerManager.WakeLock screenWake;
     private int approachingTurnIndex = -1;
     private boolean hasNavContent = false;
@@ -85,6 +86,8 @@ public class NavLiveCardService extends Service {
         };
         registerReceiver(screenOnReceiver, new IntentFilter(Intent.ACTION_SCREEN_ON));
 
+        speaker = new TtsSpeaker(this);
+
         // Start the transport (TCP server in debug, RFCOMM in release).
         transport = TransportFactory.create();
         transport.setListener(new PacketDispatcher(this));
@@ -94,6 +97,11 @@ public class NavLiveCardService extends Service {
         } catch (IOException e) {
             Log.w(TAG, "transport.start failed: " + e.getMessage());
         }
+    }
+
+    /** Called by {@code PacketDispatcher} to surface a spoken cue through bone conduction. */
+    public void speak(String utterance, String utteranceId) {
+        if (speaker != null) speaker.speak(utterance, utteranceId);
     }
 
     /** Called by {@code PacketDispatcher} when a new snippet/text/distance update arrives. */
@@ -183,6 +191,10 @@ public class NavLiveCardService extends Service {
         if (transport != null) {
             try { transport.stop(); } catch (Throwable ignored) {}
             transport = null;
+        }
+        if (speaker != null) {
+            try { speaker.shutdown(); } catch (Throwable ignored) {}
+            speaker = null;
         }
         if (liveCard != null) {
             try {
