@@ -85,14 +85,29 @@ class SnippetRenderer(
         zoom: Byte = DEFAULT_ZOOM,
         arrowRotationDeg: Float? = null,
         track: List<LatLng> = emptyList(),
+        mapRotationDeg: Float = 0f,
     ): ByteArray {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         try {
             val canvas = Canvas(bitmap)
             canvas.drawColor(Color.parseColor("#1A1A1A"))
-            paintTilesInto(canvas, center, zoom)
+            val rotated = mapRotationDeg != 0f
+            if (rotated) {
+                canvas.save()
+                canvas.rotate(-mapRotationDeg, width / 2f, height / 2f)
+            }
+            // When the canvas is rotated, the on-screen rect maps to a larger area in map-space —
+            // pad tile bounds by the diagonal half-extent so corners don't render as background.
+            val pad = if (rotated) {
+                (kotlin.math.sqrt((width * width + height * height).toDouble()) / 2
+                    - kotlin.math.min(width, height) / 2).toInt() + 1
+            } else 0
+            paintTilesInto(canvas, center, zoom, pad)
             if (track.isNotEmpty()) {
                 drawTrack(canvas, center, zoom, track)
+            }
+            if (rotated) {
+                canvas.restore()
             }
             if (arrowRotationDeg != null) {
                 drawArrow(canvas, arrowRotationDeg)
@@ -110,7 +125,7 @@ class SnippetRenderer(
         }
     }
 
-    private fun paintTilesInto(canvas: Canvas, center: LatLng, zoom: Byte) {
+    private fun paintTilesInto(canvas: Canvas, center: LatLng, zoom: Byte, padPx: Int = 0) {
         val tileSize = displayModel.tileSize
         val mapSize = MercatorProjection.getMapSize(zoom, tileSize)
         val cx = MercatorProjection.longitudeToPixelX(center.lon, mapSize)
@@ -118,10 +133,10 @@ class SnippetRenderer(
         val originX = cx - width / 2.0
         val originY = cy - height / 2.0
 
-        val txMin = floor(originX / tileSize).toInt().coerceAtLeast(0)
-        val tyMin = floor(originY / tileSize).toInt().coerceAtLeast(0)
-        val txMax = floor((originX + width - 1) / tileSize).toInt()
-        val tyMax = floor((originY + height - 1) / tileSize).toInt()
+        val txMin = floor((originX - padPx) / tileSize).toInt().coerceAtLeast(0)
+        val tyMin = floor((originY - padPx) / tileSize).toInt().coerceAtLeast(0)
+        val txMax = floor((originX + width - 1 + padPx) / tileSize).toInt()
+        val tyMax = floor((originY + height - 1 + padPx) / tileSize).toInt()
 
         for (tx in txMin..txMax) {
             for (ty in tyMin..tyMax) {

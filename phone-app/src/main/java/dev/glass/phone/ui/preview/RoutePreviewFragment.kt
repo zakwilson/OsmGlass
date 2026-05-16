@@ -114,8 +114,13 @@ class RoutePreviewFragment : Fragment(R.layout.fragment_route_preview) {
         startBtn.setOnClickListener {
             val state = viewModel.route.value
             if (state is RideViewModel.RouteState.Ready) {
-                RideService.pendingRoute = state
-                requireActivity().startService(Intent(requireContext(), RideService::class.java))
+                // If a previous ride left the service+transport alive, push directly so the new
+                // route reaches Glass without paying for a Bluetooth reconnect. Otherwise spin
+                // up the service the usual way.
+                if (!RideService.startRoute(state)) {
+                    RideService.pendingRoute = state
+                    requireActivity().startService(Intent(requireContext(), RideService::class.java))
+                }
                 viewModel.onRideStarted()
             }
         }

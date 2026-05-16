@@ -21,8 +21,10 @@ import dev.glass.phone.routing.GpxTurnExtractor
 import dev.glass.phone.routing.LatLng
 import dev.glass.phone.routing.RoutingException
 import dev.glass.phone.routing.Turn
+import dev.glass.phone.routing.approachBearingDeg
 import dev.glass.phone.routing.glyph
 import dev.glass.phone.transport.TransportFactory
+import dev.glass.phone.ui.OrientationPrefs
 import dev.glass.phone.ui.RideViewModel
 import dev.glass.protocol.Packet
 import dev.glass.protocol.transport.Transport
@@ -49,6 +51,9 @@ class RideService : Service() {
     private var transport: Transport? = null
     private var renderer: SnippetRenderer? = null
     private var pipelineJob: Job? = null
+    @Volatile private var currentRoute: RideViewModel.RouteState.Ready? = null
+    @Volatile private var currentRouteId: Long = 0L
+    @Volatile private var connected: Boolean = false
 
     interface UiObserver {
         fun onConnectionStateChange(connected: Boolean, status: String)
@@ -70,6 +75,7 @@ class RideService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         startForegroundCompat(buildNotification())
         when (val r = TransportFactory.create(applicationContext)) {
             is TransportFactory.CreateResult.Failed -> {
@@ -84,6 +90,7 @@ class RideService : Service() {
                 t.setListener(object : Transport.Listener {
                     override fun onConnected() {
                         Log.i(TAG, "transport connected")
+                        connected = true
                         uiObserver?.onConnectionStateChange(true, "Connected: ${r.description}")
                         val route = pendingRoute
                         if (route != null) startPipeline(t, route)
@@ -95,6 +102,7 @@ class RideService : Service() {
                     override fun onDisconnected(cause: Throwable?) {
                         val msg = cause?.message ?: "clean EOF"
                         Log.w(TAG, "transport disconnected: $msg")
+                        connected = false
                         uiObserver?.onConnectionStateChange(false, "Disconnected: $msg")
                         pipelineJob?.cancel()
                         pipelineJob = null
@@ -110,9 +118,10 @@ class RideService : Service() {
 
     private fun startPipeline(t: Transport, initialRoute: RideViewModel.RouteState.Ready) {
         pipelineJob?.cancel()
+        currentRoute = initialRoute
         pipelineJob = scope.launch {
             var route = initialRoute
-            var routeId = freshRouteId()
+            var routeId = freshRouteId().also { currentRouteId = it }
             try {
                 pushRoute(t, routeId, route)
                 while (true) {
@@ -144,7 +153,8 @@ class RideService : Service() {
                             }
                             t.send(Packet.RouteEnd(routeId, Packet.RouteEnd.Reason.OFFROUTE))
                             route = newRoute
-                            routeId = freshRouteId()
+                            routeId = freshRouteId().also { currentRouteId = it }
+                            currentRoute = route
                             pushRoute(t, routeId, route)
                             uiObserver?.onRouteReplaced(route)
                             uiObserver?.onRerouteStateChange(null)
@@ -181,11 +191,16 @@ class RideService : Service() {
             Log.w(TAG, "no .map file; sending TURN_BUNDLEs without snippets")
             null
         }
+        val travelUp = OrientationPrefs.get(applicationContext) == OrientationPrefs.Mode.TRAVEL_UP
         for ((idx, turn) in route.turns.withIndex()) {
             val png = if (r != null) {
                 try {
+                    val turnLatLng = LatLng(turn.lat, turn.lon)
+                    val rotation = if (travelUp) {
+                        approachBearingDeg(route.track, turnLatLng)?.toFloat() ?: 0f
+                    } else 0f
                     withContext(Dispatchers.Default) {
-                        r.render(LatLng(turn.lat, turn.lon), track = route.track)
+                        r.render(turnLatLng, track = route.track, mapRotationDeg = rotation)
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "render failed for turn $idx", e)
@@ -285,12 +300,14 @@ class RideService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
+        instance = null
         scope.cancel()
         try { transport?.stop() } catch (_: Throwable) {}
         try { renderer?.close() } catch (_: Throwable) {}
         transport = null
         renderer = null
         pendingRoute = null
+        currentRoute = null
         super.onDestroy()
     }
 
@@ -335,8 +352,56 @@ class RideService : Service() {
 
         @Volatile var pendingRoute: RideViewModel.RouteState.Ready? = null
         @Volatile var uiObserver: UiObserver? = null
+        @Volatile private var instance: RideService? = null
 
         /** Test-only override to inject a synthetic GpsSource without setting up Real or Mock from scratch. */
         @Volatile var MOCK_OVERRIDE: GpsSource? = null
+
+        /**
+         * Re-render and re-send turn snippets to Glass using the current route and orientation pref.
+         * No-op if no ride is active. Used by the UI when the orientation toggle flips mid-ride.
+         */
+        fun requestSnippetRefresh() {
+            val svc = instance ?: return
+            val t = svc.transport ?: return
+            val route = svc.currentRoute ?: return
+            svc.startPipeline(t, route)
+        }
+
+        /**
+         * Start (or replace) the active route using the already-running service + transport.
+         * Returns true if a service instance was present and the request was handled; false if
+         * the caller should fall back to startService(). Lets the UI swap routes without paying
+         * the cost of a Bluetooth reconnect between rides.
+         */
+        fun startRoute(route: RideViewModel.RouteState.Ready): Boolean {
+            val svc = instance ?: return false
+            pendingRoute = route
+            val t = svc.transport
+            if (t != null && svc.connected) svc.startPipeline(t, route)
+            return true
+        }
+
+        /**
+         * End the active route but keep the service + transport alive so the next route can be
+         * pushed immediately without a Bluetooth reconnect.
+         */
+        fun stopRide() {
+            val svc = instance ?: return
+            svc.pipelineJob?.cancel()
+            svc.pipelineJob = null
+            val t = svc.transport
+            val route = svc.currentRoute
+            if (t != null && svc.connected && route != null && svc.currentRouteId != 0L) {
+                try {
+                    t.send(Packet.RouteEnd(svc.currentRouteId, Packet.RouteEnd.Reason.CANCELLED))
+                } catch (e: Exception) {
+                    Log.w(TAG, "stopRide: send RouteEnd failed", e)
+                }
+            }
+            svc.currentRoute = null
+            svc.currentRouteId = 0L
+            pendingRoute = null
+        }
     }
 }

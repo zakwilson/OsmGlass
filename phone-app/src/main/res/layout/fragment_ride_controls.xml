@@ -68,6 +68,19 @@
             android:gravity="center"
             android:textColor="@color/fg_dim"
             android:textSize="14sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/orientation_toggle"
+            style="?attr/materialIconButtonFilledTonalStyle"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="top|end"
+            android:layout_margin="12dp"
+            android:contentDescription="@string/orientation_toggle_desc"
+            app:icon="@android:drawable/ic_menu_compass"
+            app:iconSize="24dp"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp" />
     </FrameLayout>
 
     <com.google.android.material.button.MaterialButton

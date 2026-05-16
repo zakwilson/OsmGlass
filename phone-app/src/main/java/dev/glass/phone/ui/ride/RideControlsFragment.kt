@@ -1,6 +1,5 @@
 package dev.glass.phone.ui.ride
 
-import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.view.View
@@ -13,6 +12,7 @@ import dev.glass.phone.R
 import dev.glass.phone.render.MapDataSource
 import dev.glass.phone.ride.RideService
 import dev.glass.phone.routing.LatLng
+import dev.glass.phone.ui.OrientationPrefs
 import dev.glass.phone.ui.RideViewModel
 import org.mapsforge.core.graphics.Style
 import org.mapsforge.core.model.LatLong
@@ -39,6 +39,8 @@ class RideControlsFragment : Fragment(R.layout.fragment_ride_controls) {
     private var hasRecenteredOnFirstFix = false
     private var routePolyline: Polyline? = null
     private var lastConnectionStatus: String = ""
+    private var orientationToggle: MaterialButton? = null
+    private var lastBearingDeg: Float? = null
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         AndroidGraphicFactory.createInstance(requireActivity().application)
@@ -49,17 +51,33 @@ class RideControlsFragment : Fragment(R.layout.fragment_ride_controls) {
         val mapStatus = view.findViewById<TextView>(R.id.map_status)
         val mapContainer = view.findViewById<FrameLayout>(R.id.map_container)
         val stopBtn = view.findViewById<MaterialButton>(R.id.stop_button)
+        val orientBtn = view.findViewById<MaterialButton>(R.id.orientation_toggle)
+        orientationToggle = orientBtn
 
         turnText.text = "—"
         distanceText.text = "—"
 
         stopBtn.setOnClickListener {
-            requireActivity().stopService(Intent(requireContext(), RideService::class.java))
+            // Keep the service + Bluetooth transport alive so the next route can push to Glass
+            // immediately instead of waiting on a BT reconnect.
+            RideService.stopRide()
             viewModel.onRideStopped()
+        }
+
+        orientBtn.setOnClickListener {
+            val next = if (OrientationPrefs.get(requireContext()) == OrientationPrefs.Mode.TRAVEL_UP) {
+                OrientationPrefs.Mode.NORTH_UP
+            } else {
+                OrientationPrefs.Mode.TRAVEL_UP
+            }
+            OrientationPrefs.set(requireContext(), next)
+            applyMapRotation()
+            RideService.requestSnippetRefresh()
         }
 
         mountMap(mapContainer, mapStatus)
         drawCurrentRoute()
+        applyMapRotation()
 
         RideService.uiObserver = object : RideService.UiObserver {
             override fun onConnectionStateChange(connected: Boolean, status: String) {
@@ -73,7 +91,13 @@ class RideControlsFragment : Fragment(R.layout.fragment_ride_controls) {
                 }
             }
             override fun onLocationUpdate(location: LatLng, bearingDeg: Float?) {
-                view.post { updatePositionMarker(location) }
+                view.post {
+                    updatePositionMarker(location)
+                    if (bearingDeg != null) {
+                        lastBearingDeg = bearingDeg
+                        applyMapRotation()
+                    }
+                }
             }
             override fun onRerouteStateChange(message: String?) {
                 statusText.post {
@@ -192,6 +216,23 @@ class RideControlsFragment : Fragment(R.layout.fragment_ride_controls) {
         rendererLayer = null
         positionMarker = null
         routePolyline = null
+        orientationToggle = null
         hasRecenteredOnFirstFix = false
+    }
+
+    /**
+     * Rotates the MapView so direction-of-travel points up. Uses View.setRotation on the entire
+     * MapView — mapsforge renders tiles north-up internally; visually rotating the view is the
+     * simplest approach that doesn't depend on private API surface across mapsforge versions.
+     */
+    private fun applyMapRotation() {
+        val mv = mapView ?: return
+        val mode = OrientationPrefs.get(requireContext())
+        val rotation = if (mode == OrientationPrefs.Mode.TRAVEL_UP) {
+            -(lastBearingDeg ?: 0f)
+        } else 0f
+        mv.rotation = rotation
+        // Counter-rotate the toggle icon so the compass arrow always points to actual north.
+        orientationToggle?.rotation = -rotation
     }
 }

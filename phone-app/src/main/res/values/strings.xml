@@ -31,4 +31,6 @@
     <string name="data_permission_message">Glass Cycling needs all-files access to write BRouter routing tiles into /sdcard/brouter/segments4/. Tap "Open settings" and toggle "Allow management of all files".</string>
     <string name="data_permission_open_settings">Open settings</string>
     <string name="data_country_unknown">No offline map available for this region. Routing will still work; the preview will be blank.</string>
+
+    <string name="orientation_toggle_desc">Toggle map orientation (north up / direction of travel up)</string>
 </resources>
