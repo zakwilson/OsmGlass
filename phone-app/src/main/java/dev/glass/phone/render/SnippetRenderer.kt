@@ -16,7 +16,6 @@ import org.mapsforge.map.layer.renderer.DatabaseRenderer
 import org.mapsforge.map.layer.renderer.RendererJob
 import org.mapsforge.map.model.DisplayModel
 import org.mapsforge.map.reader.MapFile
-import org.mapsforge.map.rendertheme.internal.MapsforgeThemes
 import org.mapsforge.map.rendertheme.rule.RenderThemeFuture
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -58,7 +57,7 @@ class SnippetRenderer(
         }
         themeFuture = RenderThemeFuture(
             AndroidGraphicFactory.INSTANCE,
-            MapsforgeThemes.OSMARENDER,
+            MapTheme.theme(),
             displayModel,
         )
         Thread(themeFuture, "SnippetRenderer-theme").also { it.isDaemon = true }.start()

@@ -24,6 +24,7 @@ import dev.glass.phone.R
 import dev.glass.phone.data.RouteDataPrefetcher
 import dev.glass.phone.gps.LocationProvider
 import dev.glass.phone.render.MapDataSource
+import dev.glass.phone.render.MapTheme
 import dev.glass.phone.ride.RideService
 import dev.glass.phone.routing.BRouterClient
 import dev.glass.phone.routing.GpxTurnExtractor
@@ -46,7 +47,6 @@ import org.mapsforge.map.datastore.MapDataStore
 import org.mapsforge.map.layer.overlay.Polyline
 import org.mapsforge.map.layer.renderer.TileRendererLayer
 import org.mapsforge.map.reader.MapFile
-import org.mapsforge.map.rendertheme.internal.MapsforgeThemes
 
 class RoutePreviewFragment : Fragment(R.layout.fragment_route_preview) {
 
@@ -145,7 +145,7 @@ class RoutePreviewFragment : Fragment(R.layout.fragment_route_preview) {
                 tileCache, store, mv.model.mapViewPosition,
                 AndroidGraphicFactory.INSTANCE,
             )
-            layer.setXmlRenderTheme(MapsforgeThemes.OSMARENDER)
+            layer.setXmlRenderTheme(MapTheme.theme())
             mv.layerManager.layers.add(layer)
             rendererLayer = layer
         } else {
