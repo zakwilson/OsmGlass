@@ -154,10 +154,18 @@ public abstract class Packet {
 
         public final Field topSlot;
         public final Field bottomSlot;
+        /** If true, the Glass dispatcher suppresses all TTS announcements. Lets the user rely on
+         *  OsmAnd's phone-side voice (e.g. via bone-conduction headphones) without doubling up. */
+        public final boolean muteTts;
 
         public DisplayConfig(Field topSlot, Field bottomSlot) {
+            this(topSlot, bottomSlot, false);
+        }
+
+        public DisplayConfig(Field topSlot, Field bottomSlot, boolean muteTts) {
             this.topSlot = Objects.requireNonNull(topSlot);
             this.bottomSlot = Objects.requireNonNull(bottomSlot);
+            this.muteTts = muteTts;
         }
 
         @Override public PacketType type() { return PacketType.DISPLAY_CONFIG; }
@@ -165,10 +173,37 @@ public abstract class Packet {
         @Override public boolean equals(Object o) {
             if (!(o instanceof DisplayConfig)) return false;
             DisplayConfig d = (DisplayConfig) o;
-            return topSlot == d.topSlot && bottomSlot == d.bottomSlot;
+            return topSlot == d.topSlot && bottomSlot == d.bottomSlot && muteTts == d.muteTts;
         }
-        @Override public int hashCode() { return Objects.hash(topSlot, bottomSlot); }
-        @Override public String toString() { return "DisplayConfig(top=" + topSlot + ", bottom=" + bottomSlot + ")"; }
+        @Override public int hashCode() { return Objects.hash(topSlot, bottomSlot, muteTts); }
+        @Override public String toString() {
+            return "DisplayConfig(top=" + topSlot + ", bottom=" + bottomSlot + ", muteTts=" + muteTts + ")";
+        }
+    }
+
+    /**
+     * Phone → Glass: OsmAnd has issued a voice prompt about an upcoming turn, so the Glass should
+     * wake its display and surface the LiveCard even if the rider hasn't crossed the distance
+     * threshold that PacketDispatcher normally uses to wake on PROGRESS packets.
+     */
+    public static final class TurnAlert extends Packet {
+        public final long routeId;   // uint32
+        public final int turnIndex;  // uint16
+
+        public TurnAlert(long routeId, int turnIndex) {
+            this.routeId = routeId;
+            this.turnIndex = turnIndex;
+        }
+
+        @Override public PacketType type() { return PacketType.TURN_ALERT; }
+
+        @Override public boolean equals(Object o) {
+            if (!(o instanceof TurnAlert)) return false;
+            TurnAlert a = (TurnAlert) o;
+            return routeId == a.routeId && turnIndex == a.turnIndex;
+        }
+        @Override public int hashCode() { return Objects.hash(routeId, turnIndex); }
+        @Override public String toString() { return "TurnAlert(id=" + routeId + ", #" + turnIndex + ")"; }
     }
 
     public static final class RouteEnd extends Packet {

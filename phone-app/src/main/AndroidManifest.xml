@@ -23,7 +23,15 @@
         tools:ignore="ScopedStorage" />
 
     <queries>
-        <package android:name="btools.routingapp" />
+        <!-- OsmAnd flavors we may bind to via AIDL. Glass-nav fork listed first; preferred when both fork and stock are installed. -->
+        <package android:name="net.osmand.glassnav" />
+        <package android:name="net.osmand.plus" />
+        <package android:name="net.osmand" />
+        <package android:name="net.osmand.dev" />
+        <package android:name="net.osmand.huawei" />
+        <intent>
+            <action android:name="net.osmand.aidl.OsmandAidlServiceV2" />
+        </intent>
     </queries>
 
     <application
@@ -42,9 +50,31 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".osmand.OsmAndAidlDebugActivity"
+            android:exported="true"
+            android:label="OsmAnd AIDL debug" />
+
+        <activity
+            android:name=".osmand.spike.SpikeSessionActivity"
+            android:exported="true"
+            android:label="Glass-nav AIDL spike session" />
+
         <service
             android:name=".ride.RideService"
             android:exported="false"
             android:foregroundServiceType="location|connectedDevice" />
+
+        <!-- Used by OsmAndSnippetRenderer to hand per-turn GPX files to OsmAnd via
+             grantUriPermission, since scoped storage hides our app-files dir from other apps. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.spike.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/spike_file_paths" />
+        </provider>
     </application>
 </manifest>

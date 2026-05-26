@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Per-turn GPX tmp files written by OsmAndSnippetRenderer for getBitmapForGpx IPC. -->
+    <cache-path name="route_snippets" path="route-snippets/" />
+</paths>

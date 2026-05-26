@@ -16,12 +16,14 @@ object DisplayPrefs {
     private const val KEY_PHONE_BOTTOM = "phone_bottom"
     private const val KEY_GLASS_TOP = "glass_top"
     private const val KEY_GLASS_BOTTOM = "glass_bottom"
+    private const val KEY_GLASS_MUTE_TTS = "glass_mute_tts"
 
     data class Slots(
         val phoneTop: Packet.DisplayConfig.Field,
         val phoneBottom: Packet.DisplayConfig.Field,
         val glassTop: Packet.DisplayConfig.Field,
         val glassBottom: Packet.DisplayConfig.Field,
+        val glassMuteTts: Boolean,
     )
 
     private val DEFAULTS = Slots(
@@ -29,6 +31,7 @@ object DisplayPrefs {
         phoneBottom = Packet.DisplayConfig.Field.DISTANCE_TO_TURN,
         glassTop = Packet.DisplayConfig.Field.TURN_INSTRUCTION,
         glassBottom = Packet.DisplayConfig.Field.DISTANCE_TO_TURN,
+        glassMuteTts = false,
     )
 
     private fun prefs(ctx: Context): SharedPreferences =
@@ -41,6 +44,7 @@ object DisplayPrefs {
             phoneBottom = readField(p, KEY_PHONE_BOTTOM, DEFAULTS.phoneBottom),
             glassTop = readField(p, KEY_GLASS_TOP, DEFAULTS.glassTop),
             glassBottom = readField(p, KEY_GLASS_BOTTOM, DEFAULTS.glassBottom),
+            glassMuteTts = p.getBoolean(KEY_GLASS_MUTE_TTS, DEFAULTS.glassMuteTts),
         )
     }
 
@@ -50,6 +54,7 @@ object DisplayPrefs {
             .putString(KEY_PHONE_BOTTOM, slots.phoneBottom.name)
             .putString(KEY_GLASS_TOP, slots.glassTop.name)
             .putString(KEY_GLASS_BOTTOM, slots.glassBottom.name)
+            .putBoolean(KEY_GLASS_MUTE_TTS, slots.glassMuteTts)
             .apply()
     }
 

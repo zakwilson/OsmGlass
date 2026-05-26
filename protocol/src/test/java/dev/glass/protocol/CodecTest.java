@@ -52,10 +52,17 @@ class CodecTest {
     @Test void roundTripDisplayConfig() throws Exception {
         for (Packet.DisplayConfig.Field top : Packet.DisplayConfig.Field.values()) {
             for (Packet.DisplayConfig.Field bot : Packet.DisplayConfig.Field.values()) {
-                Packet.DisplayConfig in = new Packet.DisplayConfig(top, bot);
-                assertThat(Codec.decode(Codec.encode(in))).isEqualTo(in);
+                for (boolean mute : new boolean[] { false, true }) {
+                    Packet.DisplayConfig in = new Packet.DisplayConfig(top, bot, mute);
+                    assertThat(Codec.decode(Codec.encode(in))).isEqualTo(in);
+                }
             }
         }
+    }
+
+    @Test void roundTripTurnAlert() throws Exception {
+        Packet.TurnAlert in = new Packet.TurnAlert(0xABCDEF01L, 7);
+        assertThat(Codec.decode(Codec.encode(in))).isEqualTo(in);
     }
 
     @Test void roundTripRouteEnd() throws Exception {

@@ -14,19 +14,16 @@ import dev.glass.phone.R
 import dev.glass.phone.gps.GpsSource
 import dev.glass.phone.gps.MockGpsSource
 import dev.glass.phone.gps.RealGpsSource
-import dev.glass.phone.render.MapDataSource
-import dev.glass.phone.render.SnippetRenderer
-import dev.glass.phone.routing.BRouterClient
-import dev.glass.phone.routing.GpxTurnExtractor
+import dev.glass.phone.osmand.OsmAndAidlClient
+import dev.glass.phone.osmand.OsmAndSnippetRenderer
 import dev.glass.phone.routing.LatLng
 import dev.glass.phone.routing.RoutingException
 import dev.glass.phone.routing.Turn
-import dev.glass.phone.routing.approachBearingDeg
+import dev.glass.phone.routing.computeOsmAndRoute
 import dev.glass.phone.routing.glyph
 import dev.glass.phone.routing.NavigationMode
 import dev.glass.phone.transport.TransportFactory
 import dev.glass.phone.ui.DisplayPrefs
-import dev.glass.phone.ui.OrientationPrefs
 import dev.glass.phone.ui.RideViewModel
 import dev.glass.protocol.Packet
 import dev.glass.protocol.transport.Transport
@@ -35,13 +32,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import net.osmand.aidlapi.navigation.ANavigationProgress
 
 /**
- * Foreground service. Owns: route state, transport, snippet renderer, GPS source.
+ * Foreground service. Owns: route state, transport, GPS source.
  *
  * Pipeline: gpsSource → routeMatcher → progressEmitter → transport.send.
  * On startup: pre-renders all turn snippets, sends ROUTE_START + N×TURN_BUNDLE,
@@ -51,7 +49,6 @@ class RideService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var transport: Transport? = null
-    private var renderer: SnippetRenderer? = null
     private var pipelineJob: Job? = null
     @Volatile private var currentRoute: RideViewModel.RouteState.Ready? = null
     @Volatile private var currentRouteId: Long = 0L
@@ -189,7 +186,7 @@ class RideService : Service() {
     private fun pushDisplayConfig(t: Transport) {
         try {
             val slots = DisplayPrefs.get(applicationContext)
-            t.send(Packet.DisplayConfig(slots.glassTop, slots.glassBottom))
+            t.send(Packet.DisplayConfig(slots.glassTop, slots.glassBottom, slots.glassMuteTts))
         } catch (e: Exception) {
             Log.w(TAG, "send DisplayConfig failed", e)
         }
@@ -220,48 +217,23 @@ class RideService : Service() {
         current: RideViewModel.RouteState.Ready,
         from: LatLng,
     ): RideViewModel.RouteState.Ready {
-        val gpx = withContext(Dispatchers.IO) {
-            BRouterClient(applicationContext).route(from, current.destination.location, current.mode)
-        }
-        val parsed = withContext(Dispatchers.Default) { GpxTurnExtractor().parse(gpx) }
-        require(parsed.track.size >= 2 && parsed.turns.isNotEmpty()) {
-            "reroute returned degenerate route (track=${parsed.track.size}, turns=${parsed.turns.size})"
-        }
-        Log.i(TAG, "rerouted: ${parsed.track.size} pts, ${parsed.turns.size} turns")
-        return current.copy(origin = from, track = parsed.track, turns = parsed.turns)
+        val computed = computeOsmAndRoute(
+            context = applicationContext,
+            start = from,
+            end = current.destination.location,
+            mode = current.mode,
+            destName = current.destination.displayName,
+        )
+        Log.i(TAG, "rerouted via OsmAnd: ${computed.track.size} pts, ${computed.turns.size} turns")
+        return current.copy(origin = from, track = computed.track, turns = computed.turns)
     }
 
     private suspend fun pushRoute(t: Transport, routeId: Long, route: RideViewModel.RouteState.Ready) {
         t.send(Packet.RouteStart(routeId, route.turns.size, route.destination.displayName))
         Log.i(TAG, "sent ROUTE_START id=$routeId turns=${route.turns.size}")
-        val r = ensureRenderer() ?: run {
-            Log.w(TAG, "no .map file; sending TURN_BUNDLEs without snippets")
-            null
-        }
-        val travelUp = OrientationPrefs.get(applicationContext) == OrientationPrefs.Mode.TRAVEL_UP
+        val snippets = OsmAndSnippetRenderer(applicationContext).render(route.turns, route.track)
         for ((idx, turn) in route.turns.withIndex()) {
-            val png = if (r != null) {
-                try {
-                    val turnLatLng = LatLng(turn.lat, turn.lon)
-                    val approach = approachBearingDeg(route.track, turnLatLng)?.toFloat() ?: 0f
-                    val mapRotation = if (travelUp) approach else 0f
-                    // Arrow points along the direction of travel. When the map itself is
-                    // rotated travel-up, the arrow's screen-space rotation is 0 (it's drawn
-                    // after the canvas un-rotates).
-                    val arrowRotation = if (travelUp) 0f else approach
-                    withContext(Dispatchers.Default) {
-                        r.render(
-                            turnLatLng,
-                            track = route.track,
-                            mapRotationDeg = mapRotation,
-                            arrowRotationDeg = arrowRotation,
-                        )
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "render failed for turn $idx", e)
-                    EMPTY_BYTES
-                }
-            } else EMPTY_BYTES
+            val png = snippets.getOrElse(idx) { EMPTY_BYTES }
             t.send(
                 Packet.TurnBundle(
                     routeId, idx, turn.kind,
@@ -274,7 +246,36 @@ class RideService : Service() {
         }
     }
 
+    /**
+     * Try to bind to OsmAnd and run the fork-driven progress path; on stock OsmAnd, OsmAnd not
+     * installed, or any bind failure, fall back to the phone-GPS + RouteMatcher path. The fork
+     * path sources speed/remaining/ETA/turn fields directly from OsmAnd; the fallback retains
+     * today's behaviour.
+     */
     private suspend fun streamProgress(
+        t: Transport,
+        routeId: Long,
+        route: RideViewModel.RouteState.Ready,
+    ): StreamOutcome {
+        val osmClient = OsmAndAidlClient(applicationContext)
+        val useFork = try {
+            osmClient.connect() && osmClient.hasOptionCExtensions()
+        } catch (e: Throwable) {
+            Log.w(TAG, "OsmAnd fork probe failed; falling back to GPS pipeline", e)
+            false
+        }
+        if (!useFork) {
+            try { osmClient.disconnect() } catch (_: Throwable) {}
+            return streamProgressFromGps(t, routeId, route)
+        }
+        return try {
+            streamProgressFromFork(t, routeId, route, osmClient)
+        } finally {
+            try { osmClient.disconnect() } catch (_: Throwable) {}
+        }
+    }
+
+    private suspend fun streamProgressFromGps(
         t: Transport,
         routeId: Long,
         route: RideViewModel.RouteState.Ready,
@@ -331,6 +332,113 @@ class RideService : Service() {
         return StreamOutcome.SourceEnded
     }
 
+    /**
+     * Fork path: Packet.Progress fields come from OsmAnd's [OsmAndAidlClient.navigationProgress]
+     * callback (speedKmh, remainingDistanceM, etaSec, distanceToNextTurnM, currentTurnIndex,
+     * isDeviated). Phone GPS keeps powering the UI map dot via [UiObserver.onLocationUpdate];
+     * the phone-side RouteMatcher + speed buffer are bypassed.
+     */
+    private suspend fun streamProgressFromFork(
+        t: Transport,
+        routeId: Long,
+        route: RideViewModel.RouteState.Ready,
+        osmClient: OsmAndAidlClient,
+    ): StreamOutcome = coroutineScope {
+        val gpsJob = launch {
+            try {
+                currentGpsSource(route).fixes().collect { fix ->
+                    uiObserver?.onLocationUpdate(fix.location, fix.bearingDeg)
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "phone GPS (UI dot) source ended: ${e.message}")
+            }
+        }
+        // Latest turn index seen on the OsmAnd progress flow; used to label TurnAlerts that
+        // fire from OsmAnd's voice router (which itself doesn't carry an index).
+        var latestTurnIndex = 0
+        val voiceJob = launch {
+            try {
+                osmClient.voiceRouterMessages().collect { params ->
+                    // Any voice prompt during navigation is a reason to wake the Glass.
+                    // OsmAnd's prompts include "in X meters, turn …" cues that fire well before
+                    // the rider crosses the dispatcher's distance threshold.
+                    val cmds = try { params.commands } catch (_: Throwable) { null }
+                    Log.i(TAG, "OsmAnd voice prompt — sending TurnAlert(#$latestTurnIndex) cmds=$cmds")
+                    try {
+                        t.send(Packet.TurnAlert(routeId, latestTurnIndex))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "send TurnAlert failed", e)
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "voice router subscription ended: ${e.message}")
+            }
+        }
+        val outcome: StreamOutcome = try {
+            var finalOutcome: StreamOutcome = StreamOutcome.SourceEnded
+            try {
+                osmClient.navigationProgress(intervalMs = 1_000L).collect { p ->
+                    if (p.isDeviated) {
+                        Log.i(TAG, "off-route (OsmAnd) — reroute")
+                        throw StopCollection(StreamOutcome.OffRoute(LatLng(p.currentLat, p.currentLon)))
+                    }
+                    val turnIdx = if (p.currentTurnIndex in route.turns.indices) p.currentTurnIndex
+                                  else route.turns.lastIndex.coerceAtLeast(0)
+                    latestTurnIndex = turnIdx
+                    val nextTurn = route.turns.getOrNull(turnIdx)
+                    val speedKmh = p.speedKmh.toInt().coerceIn(0, 0xffff)
+                    val remainingM = p.remainingDistanceM.coerceIn(0, 0xffff)
+                    val etaSec = p.etaSec.coerceIn(0, 0xffff)
+                    val distToTurnM = p.distanceToNextTurnM.coerceIn(0, 0xffff)
+                    t.send(
+                        Packet.Progress(
+                            routeId,
+                            turnIdx,
+                            distToTurnM,
+                            forkBearingDelta(p, nextTurn),
+                            speedKmh,
+                            remainingM,
+                            etaSec,
+                        ),
+                    )
+                    uiObserver?.onProgressUpdate(
+                        Progress(
+                            turnInstruction = nextTurn?.let { it.instruction.ifBlank { it.kind.glyph() } } ?: "",
+                            distanceToTurnM = distToTurnM,
+                            remainingDistanceM = remainingM,
+                            etaSec = etaSec,
+                            speedKmh = speedKmh,
+                        ),
+                    )
+                    if (turnIdx == route.turns.lastIndex && distToTurnM == 0) {
+                        Log.i(TAG, "arrived (OsmAnd)")
+                        throw StopCollection(StreamOutcome.Arrived)
+                    }
+                }
+            } catch (stop: StopCollection) {
+                finalOutcome = stop.outcome
+            }
+            finalOutcome
+        } finally {
+            gpsJob.cancel()
+            voiceJob.cancel()
+        }
+        outcome
+    }
+
+    /**
+     * Bearing delta in centidegrees between OsmAnd's reported heading and the bearing from the
+     * current position to [nextTurn]. Returns 0 if any input is missing.
+     */
+    private fun forkBearingDelta(p: ANavigationProgress, nextTurn: Turn?): Short {
+        if (nextTurn == null) return 0
+        val to = bearingFrom(LatLng(p.currentLat, p.currentLon), LatLng(nextTurn.lat, nextTurn.lon))
+        var diff = to - p.bearingDeg
+        while (diff > 180) diff -= 360
+        while (diff < -180) diff += 360
+        return (diff * 100).toInt().coerceIn(-32_000, 32_000).toShort()
+    }
+
     private fun currentGpsSource(route: RideViewModel.RouteState.Ready): GpsSource {
         // Prefer MockGpsSource for the demo / emulator (real GPS requires permission grant + a real signal).
         // Override by installing a mock as MOCK_OVERRIDE before starting.
@@ -339,14 +447,6 @@ class RideService : Service() {
         } catch (t: Throwable) {
             MockGpsSource(route.track)
         }
-    }
-
-    private fun ensureRenderer(): SnippetRenderer? {
-        if (renderer != null) return renderer
-        val mapFile = MapDataSource(applicationContext).resolve()
-            ?: return null
-        renderer = SnippetRenderer(application, mapFile)
-        return renderer
     }
 
     private fun bearingDelta(fix: GpsSource.Fix, nextTurn: Turn?): Short {
@@ -375,9 +475,7 @@ class RideService : Service() {
         instance = null
         scope.cancel()
         try { transport?.stop() } catch (_: Throwable) {}
-        try { renderer?.close() } catch (_: Throwable) {}
         transport = null
-        renderer = null
         pendingRoute = null
         currentRoute = null
         super.onDestroy()
@@ -449,17 +547,6 @@ class RideService : Service() {
             val t = svc.transport ?: return
             if (!svc.connected) return
             svc.pushDisplayConfig(t)
-        }
-
-        /**
-         * Re-render and re-send turn snippets to Glass using the current route and orientation pref.
-         * No-op if no ride is active. Used by the UI when the orientation toggle flips mid-ride.
-         */
-        fun requestSnippetRefresh() {
-            val svc = instance ?: return
-            val t = svc.transport ?: return
-            val route = svc.currentRoute ?: return
-            svc.startPipeline(t, route)
         }
 
         /**

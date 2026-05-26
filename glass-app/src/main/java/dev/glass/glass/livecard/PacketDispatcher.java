@@ -47,6 +47,9 @@ public final class PacketDispatcher implements Transport.Listener {
     /** Most recently received display configuration from the phone. */
     private Packet.DisplayConfig.Field topSlot = Packet.DisplayConfig.Field.TURN_INSTRUCTION;
     private Packet.DisplayConfig.Field bottomSlot = Packet.DisplayConfig.Field.DISTANCE_TO_TURN;
+    /** When true, all TTS announcements (approach, imminent, initial direction, turn alerts) are
+     *  suppressed. Set by {@link Packet.DisplayConfig#muteTts} pushed from the phone. */
+    private boolean muteTts = false;
 
     public PacketDispatcher(NavLiveCardService service) {
         this.service = service;
@@ -69,9 +72,11 @@ public final class PacketDispatcher implements Transport.Listener {
             initialDirectionSpoken = false;
         } else if (p instanceof Packet.DisplayConfig) {
             Packet.DisplayConfig dc = (Packet.DisplayConfig) p;
-            Log.i(TAG, "DISPLAY_CONFIG top=" + dc.topSlot + " bottom=" + dc.bottomSlot);
+            Log.i(TAG, "DISPLAY_CONFIG top=" + dc.topSlot + " bottom=" + dc.bottomSlot
+                + " muteTts=" + dc.muteTts);
             topSlot = dc.topSlot;
             bottomSlot = dc.bottomSlot;
+            muteTts = dc.muteTts;
         } else if (p instanceof Packet.TurnBundle) {
             Packet.TurnBundle tb = (Packet.TurnBundle) p;
             Log.d(TAG, "TURN_BUNDLE #" + tb.turnIndex + " " + tb.kind + " (" + tb.pngBytes.length + "B)");
@@ -96,14 +101,14 @@ public final class PacketDispatcher implements Transport.Listener {
                 activeTurnIndex = pr.turnIndex;
                 if (lastApproachSpokenTurn != pr.turnIndex) {
                     lastApproachSpokenTurn = pr.turnIndex;
-                    service.speak(
+                    speak(
                         TtsSpeaker.utteranceFor(TtsSpeaker.Cue.APPROACH, tb.kind, tb.instructionText, roundToTen(pr.distanceToTurnM)),
                         "approach-" + pr.turnIndex);
                 }
             }
             if (pr.distanceToTurnM <= IMMINENT_THRESHOLD_M && lastImminentSpokenTurn != pr.turnIndex) {
                 lastImminentSpokenTurn = pr.turnIndex;
-                service.speak(
+                speak(
                     TtsSpeaker.utteranceFor(TtsSpeaker.Cue.IMMINENT, tb.kind, tb.instructionText, IMMINENT_THRESHOLD_M),
                     "imminent-" + pr.turnIndex);
             }
@@ -111,6 +116,13 @@ public final class PacketDispatcher implements Transport.Listener {
             String bottom = renderField(bottomSlot, pr, tb);
             Log.i(TAG, "PROGRESS #" + pr.turnIndex + " top=" + top + " bottom=" + bottom);
             service.updateRemoteViews(tb.pngBytes, top, bottom);
+        } else if (p instanceof Packet.TurnAlert) {
+            Packet.TurnAlert a = (Packet.TurnAlert) p;
+            Log.i(TAG, "TURN_ALERT #" + a.turnIndex);
+            // OsmAnd voice prompt fired on the phone. Wake the display now even if we're still
+            // outside the distance-based approach threshold so a glance shows the upcoming turn.
+            service.onApproachingTurn(a.turnIndex);
+            activeTurnIndex = a.turnIndex;
         } else if (p instanceof Packet.RouteEnd) {
             Packet.RouteEnd re = (Packet.RouteEnd) p;
             Log.i(TAG, "ROUTE_END id=" + re.routeId + " " + re.reason);
@@ -157,7 +169,16 @@ public final class PacketDispatcher implements Transport.Listener {
             if (maneuver.endsWith(" now")) maneuver = maneuver.substring(0, maneuver.length() - 4);
             utterance = preamble + " for " + first.distanceFromStartM + " meters, then " + maneuver;
         }
-        service.speak(utterance, "initial-" + routeId);
+        speak(utterance, "initial-" + routeId);
+    }
+
+    /** Forward an utterance to the service unless the phone has muted Glass-side TTS. */
+    private void speak(String utterance, String utteranceId) {
+        if (muteTts) {
+            Log.d(TAG, "TTS muted — suppressed: " + utteranceId);
+            return;
+        }
+        service.speak(utterance, utteranceId);
     }
 
     private String renderField(

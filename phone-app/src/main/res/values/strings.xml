@@ -24,20 +24,14 @@
     <string name="history_clear_confirm_ok">Clear</string>
     <string name="cancel">Cancel</string>
 
-    <string name="data_download_title">Downloading map data…</string>
-    <string name="data_download_progress">%1$s — %2$d / %3$d MB (file %4$d/%5$d)</string>
-    <string name="data_download_progress_unknown">%1$s — %2$d MB (file %3$d/%4$d)</string>
-    <string name="data_permission_title">Allow file access</string>
-    <string name="data_permission_message">Glass Cycling needs all-files access to write BRouter routing tiles into /sdcard/brouter/segments4/. Tap "Open settings" and toggle "Allow management of all files".</string>
-    <string name="data_permission_open_settings">Open settings</string>
-    <string name="data_country_unknown">No offline map available for this region. Routing will still work; the preview will be blank.</string>
+    <string name="open_in_osmand">Open in OsmAnd</string>
 
-    <string name="orientation_toggle_desc">Toggle map orientation (north up / direction of travel up)</string>
     <string name="display_settings_desc">Configure what is shown on the phone and Glass</string>
     <string name="display_settings_title">Display</string>
     <string name="display_phone_top_label">Phone — top</string>
     <string name="display_phone_bottom_label">Phone — bottom</string>
     <string name="display_glass_top_label">Glass — top</string>
     <string name="display_glass_bottom_label">Glass — bottom</string>
+    <string name="display_glass_mute_tts_label">Mute Glass announcements (use OsmAnd audio)</string>
     <string name="display_save">Save</string>
 </resources>

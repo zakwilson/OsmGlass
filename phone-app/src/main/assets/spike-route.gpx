@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="glass-nav spike harness" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Brandenburg Gate to Reichstag</name>
+    <desc>Test fixture for the OsmAnd AIDL spike. Roughly 450 m walk through Tiergarten. Used by GpxRouteDriver to inject positions via setLocation while the spike runs, so we do not depend on OsmAnd's flaky built-in "Simulate your position".</desc>
+  </metadata>
+  <trk>
+    <name>spike-route</name>
+    <trkseg>
+      <trkpt lat="52.5163" lon="13.3777"/>
+      <trkpt lat="52.5165" lon="13.3775"/>
+      <trkpt lat="52.5168" lon="13.3773"/>
+      <trkpt lat="52.5170" lon="13.3772"/>
+      <trkpt lat="52.5173" lon="13.3770"/>
+      <trkpt lat="52.5176" lon="13.3768"/>
+      <trkpt lat="52.5179" lon="13.3766"/>
+      <trkpt lat="52.5181" lon="13.3765"/>
+      <trkpt lat="52.5183" lon="13.3763"/>
+      <trkpt lat="52.5186" lon="13.3762"/>
+    </trkseg>
+  </trk>
+</gpx>

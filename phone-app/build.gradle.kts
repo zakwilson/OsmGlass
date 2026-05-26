@@ -68,6 +68,7 @@ android {
 
 dependencies {
     implementation(project(":protocol"))
+    implementation(project(":osmand-api"))
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
@@ -79,17 +80,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
-
-    implementation("org.mapsforge:mapsforge-core:0.25.0")
-    implementation("org.mapsforge:mapsforge-map:0.25.0")
-    implementation("org.mapsforge:mapsforge-map-android:0.25.0")
-    implementation("org.mapsforge:mapsforge-map-reader:0.25.0")
-    implementation("org.mapsforge:mapsforge-themes:0.25.0")
-    implementation("com.caverock:androidsvg:1.4")
-
-    implementation("org.slf4j:slf4j-api:2.0.16")
-    implementation("org.slf4j:slf4j-simple:2.0.16") { exclude(group = "org.slf4j", module = "slf4j-api") }
-    implementation("net.sf.kxml:kxml2:2.3.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

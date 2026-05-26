@@ -124,6 +124,13 @@ public final class Codec {
                 Packet.DisplayConfig d = (Packet.DisplayConfig) p;
                 out.writeByte(d.topSlot.ordinal() & 0xff);
                 out.writeByte(d.bottomSlot.ordinal() & 0xff);
+                out.writeByte(d.muteTts ? 1 : 0);
+                break;
+            }
+            case TURN_ALERT: {
+                Packet.TurnAlert a = (Packet.TurnAlert) p;
+                out.writeInt((int) (a.routeId & 0xffffffffL));
+                out.writeShort(a.turnIndex & 0xffff);
                 break;
             }
             case ROUTE_END: {
@@ -186,9 +193,17 @@ public final class Codec {
             case DISPLAY_CONFIG: {
                 int topOrd = in.readUnsignedByte();
                 int bottomOrd = in.readUnsignedByte();
+                // muteTts flag is appended; older payloads (2 bytes) decode as muteTts=false.
+                boolean muteTts = in.available() > 0 && in.readUnsignedByte() != 0;
                 return new Packet.DisplayConfig(
                     Packet.DisplayConfig.Field.fromCode(topOrd),
-                    Packet.DisplayConfig.Field.fromCode(bottomOrd));
+                    Packet.DisplayConfig.Field.fromCode(bottomOrd),
+                    muteTts);
+            }
+            case TURN_ALERT: {
+                long routeId = in.readInt() & 0xffffffffL;
+                int turnIndex = in.readUnsignedShort();
+                return new Packet.TurnAlert(routeId, turnIndex);
             }
             case ROUTE_END: {
                 long routeId = in.readInt() & 0xffffffffL;

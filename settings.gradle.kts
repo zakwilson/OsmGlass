@@ -22,4 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "glass-cycling"
 
-include(":protocol", ":phone-app", ":glass-app")
+include(":protocol", ":phone-app", ":glass-app", ":osmand-api")
