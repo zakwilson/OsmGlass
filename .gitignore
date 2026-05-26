@@ -18,6 +18,7 @@ captures/
 
 # Logs
 *.log
+spikes/
 
 # Downloaded data (Berlin .map / .rd5, BRouter APK)
 data/*.map

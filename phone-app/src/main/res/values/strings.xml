@@ -33,5 +33,6 @@
     <string name="display_glass_top_label">Glass — top</string>
     <string name="display_glass_bottom_label">Glass — bottom</string>
     <string name="display_glass_mute_tts_label">Mute Glass announcements (use OsmAnd audio)</string>
+    <string name="display_map_orientation_label">Glass map orientation</string>
     <string name="display_save">Save</string>
 </resources>

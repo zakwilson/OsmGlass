@@ -192,14 +192,14 @@ public class NavLiveCardService extends Service {
             return base;
         }
         Canvas canvas = new Canvas(mutable);
-        // Arrow geometry: an isoceles chevron 24 px tall, 20 px wide. Origin (0,0) sits at the
+        // Arrow geometry: an isoceles chevron 48 px tall, 44 px wide. Origin (0,0) sits at the
         // rider's current map position; the tip points "up" in the local frame, which we then
         // rotate by the heading so it points in the actual direction of travel.
         Path path = new Path();
-        path.moveTo(0f, -14f);   // tip
-        path.lineTo(11f, 10f);   // right shoulder
-        path.lineTo(0f, 4f);     // inner notch (makes the chevron read as an arrow, not a triangle)
-        path.lineTo(-11f, 10f);  // left shoulder
+        path.moveTo(0f, -28f);   // tip
+        path.lineTo(22f, 20f);   // right shoulder
+        path.lineTo(0f, 8f);     // inner notch (makes the chevron read as an arrow, not a triangle)
+        path.lineTo(-22f, 20f);  // left shoulder
         path.close();
 
         canvas.save();

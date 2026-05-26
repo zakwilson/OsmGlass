@@ -235,7 +235,16 @@ class RideService : Service() {
     private suspend fun pushRoute(t: Transport, routeId: Long, route: RideViewModel.RouteState.Ready) {
         t.send(Packet.RouteStart(routeId, route.turns.size, route.destination.displayName))
         Log.i(TAG, "sent ROUTE_START id=$routeId turns=${route.turns.size}")
-        val snippets = OsmAndSnippetRenderer(applicationContext).render(route.turns, route.track)
+        pushSnippets(t, routeId, route)
+    }
+
+    /** Render snippets for [route] using the current orientation pref and send a TurnBundle for
+     *  each turn. Glass's PacketDispatcher keys its TurnBundle cache by (routeId, turnIndex), so
+     *  re-sending here overwrites the cached bitmap and the next 1 Hz Progress packet picks it up. */
+    private suspend fun pushSnippets(t: Transport, routeId: Long, route: RideViewModel.RouteState.Ready) {
+        val orientation = DisplayPrefs.get(applicationContext).mapOrientation
+        val snippets = OsmAndSnippetRenderer(applicationContext)
+            .render(route.turns, route.track, orientation)
         snippetBoundsByTurn = route.turns.indices.map { snippets.getOrNull(it)?.bounds }
         for ((idx, turn) in route.turns.withIndex()) {
             val snippet = snippets.getOrNull(idx)
@@ -267,21 +276,22 @@ class RideService : Service() {
         val bounds = snippetBoundsByTurn.getOrNull(turnIndex)
             ?: return Triple(Packet.Progress.MARKER_NONE, Packet.Progress.MARKER_NONE, Packet.Progress.MARKER_NONE)
         val live = bounds.project(lat, lon)
-        return if (live.inBounds) {
-            val bearing = bearingDeg?.let { wrap360(it.toDouble()) } ?: bounds.startBearingDeg
-            Triple(
-                live.x.toInt().coerceIn(0, bounds.widthPx - 1),
-                live.y.toInt().coerceIn(0, bounds.heightPx - 1),
-                (wrap360(bearing) * 100.0).toInt().coerceIn(0, 35_999),
-            )
+        val (px, py, rawBearing) = if (live.inBounds) {
+            val b = bearingDeg?.let { wrap360(it.toDouble()) } ?: bounds.startBearingDeg
+            Triple(live.x, live.y, b)
         } else {
             val fallback = bounds.project(bounds.startLat, bounds.startLon)
-            Triple(
-                fallback.x.toInt().coerceIn(0, bounds.widthPx - 1),
-                fallback.y.toInt().coerceIn(0, bounds.heightPx - 1),
-                (wrap360(bounds.startBearingDeg) * 100.0).toInt().coerceIn(0, 35_999),
-            )
+            Triple(fallback.x, fallback.y, bounds.startBearingDeg)
         }
+        // In TRAVEL_UP, the snippet bitmap was rotated so the entry direction points up. The
+        // marker arrow is drawn by Glass with a plain canvas.rotate, so we have to shift the
+        // bearing into the rotated frame before sending.
+        val finalBearing = bounds.transformBearing(rawBearing)
+        return Triple(
+            px.toInt().coerceIn(0, bounds.widthPx - 1),
+            py.toInt().coerceIn(0, bounds.heightPx - 1),
+            (wrap360(finalBearing) * 100.0).toInt().coerceIn(0, 35_999),
+        )
     }
 
     private fun wrap360(deg: Double): Double {
@@ -597,6 +607,28 @@ class RideService : Service() {
             val t = svc.transport ?: return
             if (!svc.connected) return
             svc.pushDisplayConfig(t)
+        }
+
+        /**
+         * Re-render all snippets for the active route and re-push them to Glass. Called when the
+         * user changes the map orientation mid-ride; the existing per-turn pipeline on Glass
+         * picks up the new bitmaps on its next Progress packet. No-op without a live transport or
+         * active route.
+         */
+        fun refreshSnippets() {
+            val svc = instance ?: return
+            val t = svc.transport ?: return
+            if (!svc.connected) return
+            val route = svc.currentRoute ?: return
+            val routeId = svc.currentRouteId
+            if (routeId == 0L) return
+            svc.scope.launch {
+                try {
+                    svc.pushSnippets(t, routeId, route)
+                } catch (e: Exception) {
+                    Log.w(TAG, "refreshSnippets failed", e)
+                }
+            }
         }
 
         /**

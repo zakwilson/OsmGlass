@@ -17,6 +17,14 @@ object DisplayPrefs {
     private const val KEY_GLASS_TOP = "glass_top"
     private const val KEY_GLASS_BOTTOM = "glass_bottom"
     private const val KEY_GLASS_MUTE_TTS = "glass_mute_tts"
+    private const val KEY_MAP_ORIENTATION = "map_orientation"
+
+    /**
+     * Rotation applied to the Glass map snippets before they're sent. NORTH_UP leaves OsmAnd's
+     * raw output untouched; TRAVEL_UP rotates each per-turn snippet so the route's entry
+     * direction at the turn points straight up.
+     */
+    enum class MapOrientation { NORTH_UP, TRAVEL_UP }
 
     data class Slots(
         val phoneTop: Packet.DisplayConfig.Field,
@@ -24,6 +32,7 @@ object DisplayPrefs {
         val glassTop: Packet.DisplayConfig.Field,
         val glassBottom: Packet.DisplayConfig.Field,
         val glassMuteTts: Boolean,
+        val mapOrientation: MapOrientation,
     )
 
     private val DEFAULTS = Slots(
@@ -32,6 +41,7 @@ object DisplayPrefs {
         glassTop = Packet.DisplayConfig.Field.TURN_INSTRUCTION,
         glassBottom = Packet.DisplayConfig.Field.DISTANCE_TO_TURN,
         glassMuteTts = false,
+        mapOrientation = MapOrientation.NORTH_UP,
     )
 
     private fun prefs(ctx: Context): SharedPreferences =
@@ -45,6 +55,7 @@ object DisplayPrefs {
             glassTop = readField(p, KEY_GLASS_TOP, DEFAULTS.glassTop),
             glassBottom = readField(p, KEY_GLASS_BOTTOM, DEFAULTS.glassBottom),
             glassMuteTts = p.getBoolean(KEY_GLASS_MUTE_TTS, DEFAULTS.glassMuteTts),
+            mapOrientation = readOrientation(p, DEFAULTS.mapOrientation),
         )
     }
 
@@ -55,7 +66,22 @@ object DisplayPrefs {
             .putString(KEY_GLASS_TOP, slots.glassTop.name)
             .putString(KEY_GLASS_BOTTOM, slots.glassBottom.name)
             .putBoolean(KEY_GLASS_MUTE_TTS, slots.glassMuteTts)
+            .putString(KEY_MAP_ORIENTATION, slots.mapOrientation.name)
             .apply()
+    }
+
+    private fun readOrientation(p: SharedPreferences, default: MapOrientation): MapOrientation {
+        val raw = p.getString(KEY_MAP_ORIENTATION, null) ?: return default
+        return try {
+            MapOrientation.valueOf(raw)
+        } catch (_: IllegalArgumentException) {
+            default
+        }
+    }
+
+    fun orientationLabel(orientation: MapOrientation): String = when (orientation) {
+        MapOrientation.NORTH_UP -> "North up"
+        MapOrientation.TRAVEL_UP -> "Travel direction up"
     }
 
     private fun readField(

@@ -21,6 +21,7 @@ import com.goodanser.osmglass.protocol.Packet
 class DisplaySettingsDialogFragment : DialogFragment() {
 
     private val fields = Packet.DisplayConfig.Field.values().toList()
+    private val orientations = DisplayPrefs.MapOrientation.values().toList()
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
         val view = LayoutInflater.from(requireContext())
@@ -30,6 +31,7 @@ class DisplaySettingsDialogFragment : DialogFragment() {
         val spinnerPhoneBottom = view.findViewById<Spinner>(R.id.spinner_phone_bottom)
         val spinnerGlassTop = view.findViewById<Spinner>(R.id.spinner_glass_top)
         val spinnerGlassBottom = view.findViewById<Spinner>(R.id.spinner_glass_bottom)
+        val spinnerMapOrientation = view.findViewById<Spinner>(R.id.spinner_map_orientation)
         val checkGlassMuteTts = view.findViewById<CheckBox>(R.id.check_glass_mute_tts)
 
         val labels = fields.map { DisplayPrefs.label(it) }
@@ -40,11 +42,19 @@ class DisplaySettingsDialogFragment : DialogFragment() {
         spinnerGlassTop.adapter = adapter
         spinnerGlassBottom.adapter = adapter
 
+        val orientationAdapter = ArrayAdapter(
+            requireContext(),
+            android.R.layout.simple_spinner_item,
+            orientations.map { DisplayPrefs.orientationLabel(it) },
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        spinnerMapOrientation.adapter = orientationAdapter
+
         val current = DisplayPrefs.get(requireContext())
         spinnerPhoneTop.setSelection(fields.indexOf(current.phoneTop))
         spinnerPhoneBottom.setSelection(fields.indexOf(current.phoneBottom))
         spinnerGlassTop.setSelection(fields.indexOf(current.glassTop))
         spinnerGlassBottom.setSelection(fields.indexOf(current.glassBottom))
+        spinnerMapOrientation.setSelection(orientations.indexOf(current.mapOrientation))
         checkGlassMuteTts.isChecked = current.glassMuteTts
 
         return AlertDialog.Builder(requireContext())
@@ -57,9 +67,13 @@ class DisplaySettingsDialogFragment : DialogFragment() {
                     glassTop = fields[spinnerGlassTop.selectedItemPosition],
                     glassBottom = fields[spinnerGlassBottom.selectedItemPosition],
                     glassMuteTts = checkGlassMuteTts.isChecked,
+                    mapOrientation = orientations[spinnerMapOrientation.selectedItemPosition],
                 )
                 DisplayPrefs.set(requireContext(), updated)
                 RideService.pushDisplayConfig()
+                if (updated.mapOrientation != current.mapOrientation) {
+                    RideService.refreshSnippets()
+                }
             }
             .setNegativeButton(R.string.cancel, null)
             .create()
