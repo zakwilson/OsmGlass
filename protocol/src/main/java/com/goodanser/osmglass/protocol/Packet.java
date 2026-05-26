@@ -93,6 +93,9 @@ public abstract class Packet {
     }
 
     public static final class Progress extends Packet {
+        /** Sentinel for "unknown / no marker" in the marker fields below. */
+        public static final int MARKER_NONE = -1;
+
         public final long routeId;            // uint32
         public final int turnIndex;           // uint16
         public final int distanceToTurnM;     // uint16
@@ -100,9 +103,25 @@ public abstract class Packet {
         public final int speedKmh;            // uint16
         public final int remainingDistanceM;  // uint16, meters from current position to arrival
         public final int etaSec;              // uint16, seconds remaining to arrival
+        /** X pixel coord (0..snippetWidth-1) of the position arrow in the current TurnBundle's
+         *  snippet bitmap, or {@link #MARKER_NONE} if no marker should be drawn. Set by the phone
+         *  using the same projection used to render the snippet. */
+        public final int markerPxX;           // uint16, MARKER_NONE encoded as 0xFFFF
+        /** Y pixel coord (0..snippetHeight-1) of the position arrow, or {@link #MARKER_NONE}. */
+        public final int markerPxY;           // uint16
+        /** Marker heading in centidegrees clockwise from north (0..35999), or {@link #MARKER_NONE}
+         *  if no bearing is known (Glass draws a circle instead of an oriented arrow). */
+        public final int markerBearingDeg100; // uint16
 
         public Progress(long routeId, int turnIndex, int distanceToTurnM, short bearingDelta100,
                         int speedKmh, int remainingDistanceM, int etaSec) {
+            this(routeId, turnIndex, distanceToTurnM, bearingDelta100, speedKmh, remainingDistanceM,
+                etaSec, MARKER_NONE, MARKER_NONE, MARKER_NONE);
+        }
+
+        public Progress(long routeId, int turnIndex, int distanceToTurnM, short bearingDelta100,
+                        int speedKmh, int remainingDistanceM, int etaSec,
+                        int markerPxX, int markerPxY, int markerBearingDeg100) {
             this.routeId = routeId;
             this.turnIndex = turnIndex;
             this.distanceToTurnM = distanceToTurnM;
@@ -110,6 +129,9 @@ public abstract class Packet {
             this.speedKmh = speedKmh;
             this.remainingDistanceM = remainingDistanceM;
             this.etaSec = etaSec;
+            this.markerPxX = markerPxX;
+            this.markerPxY = markerPxY;
+            this.markerBearingDeg100 = markerBearingDeg100;
         }
 
         @Override public PacketType type() { return PacketType.PROGRESS; }
@@ -120,16 +142,19 @@ public abstract class Packet {
             return routeId == p.routeId && turnIndex == p.turnIndex
                 && distanceToTurnM == p.distanceToTurnM && bearingDelta100 == p.bearingDelta100
                 && speedKmh == p.speedKmh
-                && remainingDistanceM == p.remainingDistanceM && etaSec == p.etaSec;
+                && remainingDistanceM == p.remainingDistanceM && etaSec == p.etaSec
+                && markerPxX == p.markerPxX && markerPxY == p.markerPxY
+                && markerBearingDeg100 == p.markerBearingDeg100;
         }
         @Override public int hashCode() {
             return Objects.hash(routeId, turnIndex, distanceToTurnM, bearingDelta100, speedKmh,
-                remainingDistanceM, etaSec);
+                remainingDistanceM, etaSec, markerPxX, markerPxY, markerBearingDeg100);
         }
         @Override public String toString() {
             return "Progress(id=" + routeId + ", #" + turnIndex + ", " + distanceToTurnM
                 + "m, bearing=" + (bearingDelta100 / 100.0) + "°, " + speedKmh + "km/h, rem="
-                + remainingDistanceM + "m, eta=" + etaSec + "s)";
+                + remainingDistanceM + "m, eta=" + etaSec + "s, marker="
+                + (markerPxX == MARKER_NONE ? "none" : "(" + markerPxX + "," + markerPxY + "," + (markerBearingDeg100 / 100.0) + "°)") + ")";
         }
     }
 

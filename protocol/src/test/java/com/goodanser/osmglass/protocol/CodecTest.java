@@ -45,8 +45,43 @@ class CodecTest {
     }
 
     @Test void roundTripProgress() throws Exception {
+        // Legacy 7-arg constructor leaves marker fields as MARKER_NONE.
         Packet.Progress in = new Packet.Progress(7L, 3, 142, (short) -2750, 28, 4321, 900);
-        assertThat(Codec.decode(Codec.encode(in))).isEqualTo(in);
+        Packet.Progress out = (Packet.Progress) Codec.decode(Codec.encode(in));
+        assertThat(out).isEqualTo(in);
+        assertThat(out.markerPxX).isEqualTo(Packet.Progress.MARKER_NONE);
+        assertThat(out.markerPxY).isEqualTo(Packet.Progress.MARKER_NONE);
+        assertThat(out.markerBearingDeg100).isEqualTo(Packet.Progress.MARKER_NONE);
+    }
+
+    @Test void roundTripProgressWithMarker() throws Exception {
+        Packet.Progress in = new Packet.Progress(7L, 3, 142, (short) -2750, 28, 4321, 900,
+            320, 180, 9000);
+        Packet.Progress out = (Packet.Progress) Codec.decode(Codec.encode(in));
+        assertThat(out).isEqualTo(in);
+        assertThat(out.markerPxX).isEqualTo(320);
+        assertThat(out.markerPxY).isEqualTo(180);
+        assertThat(out.markerBearingDeg100).isEqualTo(9000);
+    }
+
+    @Test void progressDecodesLegacyPayloadWithoutMarker() throws Exception {
+        // Synthesize a payload that contains only the original 16 bytes (no marker trailer).
+        java.io.ByteArrayOutputStream payload = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(payload);
+        out.writeInt(42);              // routeId
+        out.writeShort(5);             // turnIndex
+        out.writeShort(123);           // distanceToTurnM
+        out.writeShort(0);             // bearingDelta100
+        out.writeShort(20);            // speedKmh
+        out.writeShort(800);           // remainingDistanceM
+        out.writeShort(180);           // etaSec
+        out.flush();
+        Packet.Progress decoded = (Packet.Progress) Codec.decodePayload(PacketType.PROGRESS, payload.toByteArray());
+        assertThat(decoded.routeId).isEqualTo(42L);
+        assertThat(decoded.turnIndex).isEqualTo(5);
+        assertThat(decoded.markerPxX).isEqualTo(Packet.Progress.MARKER_NONE);
+        assertThat(decoded.markerPxY).isEqualTo(Packet.Progress.MARKER_NONE);
+        assertThat(decoded.markerBearingDeg100).isEqualTo(Packet.Progress.MARKER_NONE);
     }
 
     @Test void roundTripDisplayConfig() throws Exception {

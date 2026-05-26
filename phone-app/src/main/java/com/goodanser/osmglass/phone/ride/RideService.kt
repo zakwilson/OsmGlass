@@ -16,6 +16,7 @@ import com.goodanser.osmglass.phone.gps.MockGpsSource
 import com.goodanser.osmglass.phone.gps.RealGpsSource
 import com.goodanser.osmglass.phone.osmand.OsmAndAidlClient
 import com.goodanser.osmglass.phone.osmand.OsmAndSnippetRenderer
+import com.goodanser.osmglass.phone.osmand.SnippetBounds
 import com.goodanser.osmglass.phone.routing.LatLng
 import com.goodanser.osmglass.phone.routing.RoutingException
 import com.goodanser.osmglass.phone.routing.Turn
@@ -54,6 +55,9 @@ class RideService : Service() {
     @Volatile private var currentRouteId: Long = 0L
     @Volatile private var connected: Boolean = false
     private val speedSamples = ArrayDeque<Int>(SPEED_BUFFER_CAPACITY)
+    /** Snippet bounds keyed by turn index, captured at pushRoute. Used per Progress to project
+     *  the live position arrow into the cached TurnBundle's bitmap. */
+    @Volatile private var snippetBoundsByTurn: List<SnippetBounds?> = emptyList()
 
     interface UiObserver {
         fun onConnectionStateChange(connected: Boolean, status: String)
@@ -232,8 +236,10 @@ class RideService : Service() {
         t.send(Packet.RouteStart(routeId, route.turns.size, route.destination.displayName))
         Log.i(TAG, "sent ROUTE_START id=$routeId turns=${route.turns.size}")
         val snippets = OsmAndSnippetRenderer(applicationContext).render(route.turns, route.track)
+        snippetBoundsByTurn = route.turns.indices.map { snippets.getOrNull(it)?.bounds }
         for ((idx, turn) in route.turns.withIndex()) {
-            val png = snippets.getOrElse(idx) { EMPTY_BYTES }
+            val snippet = snippets.getOrNull(idx)
+            val png = snippet?.pngBytes ?: EMPTY_BYTES
             t.send(
                 Packet.TurnBundle(
                     routeId, idx, turn.kind,
@@ -244,6 +250,44 @@ class RideService : Service() {
             )
             Log.d(TAG, "sent TURN_BUNDLE #$idx (${turn.kind}, ${png.size}B)")
         }
+    }
+
+    /**
+     * Project the rider's current geographic position onto the snippet bitmap for [turnIndex].
+     * Returns null marker fields if no bounds are known for this turn (e.g. the snippet window
+     * was empty). When the rider falls outside the bitmap, falls back to the polyline's entry
+     * point (the start of the route line within the snippet), as requested by the marker spec.
+     */
+    private fun computeMarker(
+        turnIndex: Int,
+        lat: Double,
+        lon: Double,
+        bearingDeg: Float?,
+    ): Triple<Int, Int, Int> {
+        val bounds = snippetBoundsByTurn.getOrNull(turnIndex)
+            ?: return Triple(Packet.Progress.MARKER_NONE, Packet.Progress.MARKER_NONE, Packet.Progress.MARKER_NONE)
+        val live = bounds.project(lat, lon)
+        return if (live.inBounds) {
+            val bearing = bearingDeg?.let { wrap360(it.toDouble()) } ?: bounds.startBearingDeg
+            Triple(
+                live.x.toInt().coerceIn(0, bounds.widthPx - 1),
+                live.y.toInt().coerceIn(0, bounds.heightPx - 1),
+                (wrap360(bearing) * 100.0).toInt().coerceIn(0, 35_999),
+            )
+        } else {
+            val fallback = bounds.project(bounds.startLat, bounds.startLon)
+            Triple(
+                fallback.x.toInt().coerceIn(0, bounds.widthPx - 1),
+                fallback.y.toInt().coerceIn(0, bounds.heightPx - 1),
+                (wrap360(bounds.startBearingDeg) * 100.0).toInt().coerceIn(0, 35_999),
+            )
+        }
+    }
+
+    private fun wrap360(deg: Double): Double {
+        var d = deg % 360.0
+        if (d < 0) d += 360.0
+        return d
     }
 
     /**
@@ -299,6 +343,8 @@ class RideService : Service() {
                 val estSpeed = estimatedSpeedKmh(route.mode).coerceAtLeast(0.1f)
                 val etaSec = ((remainingM.toFloat() / 1000f) / estSpeed * 3600f)
                     .toInt().coerceIn(0, 0xffff)
+                val (markerX, markerY, markerBearing) = computeMarker(
+                    match.nextTurnIndex, fix.location.lat, fix.location.lon, fix.bearingDeg)
                 t.send(
                     Packet.Progress(
                         routeId,
@@ -308,6 +354,7 @@ class RideService : Service() {
                         speedKmh,
                         remainingM,
                         etaSec,
+                        markerX, markerY, markerBearing,
                     ),
                 )
                 if (match.nextTurnIndex != lastTurnIdx) lastTurnIdx = match.nextTurnIndex
@@ -390,6 +437,8 @@ class RideService : Service() {
                     val remainingM = p.remainingDistanceM.coerceIn(0, 0xffff)
                     val etaSec = p.etaSec.coerceIn(0, 0xffff)
                     val distToTurnM = p.distanceToNextTurnM.coerceIn(0, 0xffff)
+                    val (markerX, markerY, markerBearing) = computeMarker(
+                        turnIdx, p.currentLat, p.currentLon, p.bearingDeg)
                     t.send(
                         Packet.Progress(
                             routeId,
@@ -399,6 +448,7 @@ class RideService : Service() {
                             speedKmh,
                             remainingM,
                             etaSec,
+                            markerX, markerY, markerBearing,
                         ),
                     )
                     uiObserver?.onProgressUpdate(

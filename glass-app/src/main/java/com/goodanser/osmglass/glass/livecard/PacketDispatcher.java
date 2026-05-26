@@ -114,8 +114,14 @@ public final class PacketDispatcher implements Transport.Listener {
             }
             String top = renderField(topSlot, pr, tb);
             String bottom = renderField(bottomSlot, pr, tb);
-            Log.i(TAG, "PROGRESS #" + pr.turnIndex + " top=" + top + " bottom=" + bottom);
-            service.updateRemoteViews(tb.pngBytes, top, bottom);
+            Log.i(TAG, "PROGRESS #" + pr.turnIndex + " top=" + top + " bottom=" + bottom
+                + " marker=" + (pr.markerPxX == Packet.Progress.MARKER_NONE
+                    ? "none"
+                    : ("(" + pr.markerPxX + "," + pr.markerPxY + ","
+                        + (pr.markerBearingDeg100 / 100.0) + "°)")));
+            service.updateRemoteViews(
+                tb.pngBytes, top, bottom,
+                pr.markerPxX, pr.markerPxY, pr.markerBearingDeg100);
         } else if (p instanceof Packet.TurnAlert) {
             Packet.TurnAlert a = (Packet.TurnAlert) p;
             Log.i(TAG, "TURN_ALERT #" + a.turnIndex);

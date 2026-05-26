@@ -17,17 +17,33 @@ import java.io.File
 /**
  * Renders per-turn map snippets via OsmAnd's AIDL `getBitmapForGpx`. For each turn, slices the
  * real route polyline to a [WINDOW_M] window on each side of the turn point, writes it as GPX
- * to a cache subdir, hands OsmAnd a FileProvider URI with read permission, and returns the PNG
- * bytes.
+ * to a cache subdir, hands OsmAnd a FileProvider URI with read permission, and returns both the
+ * PNG bytes and the [SnippetBounds] used to project the live position marker into the bitmap.
  *
  * If OsmAnd is not installed or bind fails, [render] returns empty PNGs for every turn — callers
- * (RideService.pushRoute) will still send TURN_BUNDLEs without an image attached.
+ * (RideService.pushRoute) will still send TURN_BUNDLEs without an image attached. Bounds are
+ * still produced from the polyline window so the position-marker pipeline keeps working even
+ * with placeholder snippets.
  *
  * North-up always; OsmAnd does not accept a rotation parameter for this call.
  */
 class OsmAndSnippetRenderer(private val context: Context) {
 
-    suspend fun render(turns: List<Turn>, track: List<LatLng>): List<ByteArray> {
+    /**
+     * Output of [render] for a single turn. [pngBytes] may be empty (OsmAnd unavailable or this
+     * turn's window was too short to render). [bounds] is null only when the polyline window for
+     * this turn was empty, which means the marker pipeline cannot do anything with this snippet.
+     */
+    data class Snippet(val pngBytes: ByteArray, val bounds: SnippetBounds?) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is Snippet) return false
+            return pngBytes.contentEquals(other.pngBytes) && bounds == other.bounds
+        }
+        override fun hashCode(): Int = pngBytes.contentHashCode() * 31 + (bounds?.hashCode() ?: 0)
+    }
+
+    suspend fun render(turns: List<Turn>, track: List<LatLng>): List<Snippet> {
         if (turns.isEmpty()) return emptyList()
         val client = OsmAndAidlClient(context)
         val connected = try { client.connect() } catch (e: Throwable) {
@@ -36,15 +52,18 @@ class OsmAndSnippetRenderer(private val context: Context) {
         }
         if (!connected) {
             try { client.disconnect() } catch (_: Throwable) {}
-            return List(turns.size) { EMPTY }
+            // Still emit per-turn bounds so the position marker can be projected; the LiveCard
+            // simply has no map underneath.
+            return turns.map { Snippet(EMPTY, boundsForTurn(track, it)) }
         }
         val osmAndPkg = client.osmAndPackage
         val dir = File(context.cacheDir, "route-snippets").apply { mkdirs() }
-        val results = ArrayList<ByteArray>(turns.size)
+        val results = ArrayList<Snippet>(turns.size)
         try {
             for ((idx, turn) in turns.withIndex()) {
-                results += try {
-                    val window = sliceAroundTurn(track, turn, WINDOW_M)
+                val window = sliceAroundTurn(track, turn, WINDOW_M)
+                val bounds = SnippetBounds.fromWindow(window, WIDTH, HEIGHT)
+                val png = try {
                     if (window.size < 2) {
                         Log.w(TAG, "no usable track window for turn $idx; skipping snippet")
                         EMPTY
@@ -55,12 +74,18 @@ class OsmAndSnippetRenderer(private val context: Context) {
                     Log.w(TAG, "snippet render failed for turn $idx", e)
                     EMPTY
                 }
+                results += Snippet(png, bounds)
             }
         } finally {
             try { client.disconnect() } catch (_: Throwable) {}
             dir.listFiles()?.forEach { runCatching { it.delete() } }
         }
         return results
+    }
+
+    private fun boundsForTurn(track: List<LatLng>, turn: Turn): SnippetBounds? {
+        val window = sliceAroundTurn(track, turn, WINDOW_M)
+        return SnippetBounds.fromWindow(window, WIDTH, HEIGHT)
     }
 
     private suspend fun renderOne(

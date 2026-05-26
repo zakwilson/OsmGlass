@@ -6,6 +6,12 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -17,6 +23,7 @@ import com.google.android.glass.timeline.LiveCard;
 
 import com.goodanser.osmglass.glass.R;
 import com.goodanser.osmglass.glass.transport.TransportFactory;
+import com.goodanser.osmglass.protocol.Packet;
 import com.goodanser.osmglass.protocol.transport.Transport;
 
 import java.io.IOException;
@@ -121,16 +128,37 @@ public class NavLiveCardService extends Service {
         if (speaker != null) speaker.speak(utterance, utteranceId);
     }
 
-    /** Called by {@code PacketDispatcher} when a new snippet/text/distance update arrives. */
+    /**
+     * Overload without a position marker — used for transport-state updates (clearing on
+     * connect, "Done"/"Rerouting…" on RouteEnd).
+     */
     public void updateRemoteViews(byte[] pngBytes, String instruction, String distance) {
+        updateRemoteViews(pngBytes, instruction, distance,
+            Packet.Progress.MARKER_NONE, Packet.Progress.MARKER_NONE, Packet.Progress.MARKER_NONE);
+    }
+
+    /**
+     * Called by {@code PacketDispatcher} when a new snippet/text/distance update arrives. When
+     * the marker fields are not {@link Packet.Progress#MARKER_NONE} the snippet is composited
+     * with a position arrow at the given pixel coordinates rotated by the given bearing — the
+     * phone has already done the geo-to-pixel projection, so we just paint at (markerPxX,
+     * markerPxY).
+     */
+    public void updateRemoteViews(byte[] pngBytes, String instruction, String distance,
+                                  int markerPxX, int markerPxY, int markerBearingDeg100) {
         if (views == null) return;
         // Reset any oversized "DISCONNECTED" text back to the normal instruction size — see
         // showDisconnectAlert().
         views.setFloat(R.id.instruction, "setTextSize", 22f);
         if (pngBytes != null && pngBytes.length > 0) {
-            android.graphics.Bitmap bm = android.graphics.BitmapFactory
-                .decodeByteArray(pngBytes, 0, pngBytes.length);
-            if (bm != null) views.setImageViewBitmap(R.id.snippet, bm);
+            Bitmap bm = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.length);
+            if (bm != null) {
+                if (markerPxX != Packet.Progress.MARKER_NONE
+                    && markerPxY != Packet.Progress.MARKER_NONE) {
+                    bm = drawPositionMarker(bm, markerPxX, markerPxY, markerBearingDeg100);
+                }
+                views.setImageViewBitmap(R.id.snippet, bm);
+            }
             hasNavContent = true;
         }
         if (instruction != null) {
@@ -145,6 +173,51 @@ public class NavLiveCardService extends Service {
                 Log.w(TAG, "setViews failed: " + t.getMessage());
             }
         }
+    }
+
+    /**
+     * Composite a position-arrow marker on a copy of [base]. The marker is a filled chevron
+     * pointing up the bearing, with a thin white border so it reads against any underlying
+     * map color. Returns the original bitmap on copy failure (better to show no marker than
+     * to drop the whole snippet update).
+     *
+     * Visible for testing.
+     */
+    static Bitmap drawPositionMarker(Bitmap base, int px, int py, int bearingDeg100) {
+        Bitmap mutable;
+        try {
+            mutable = base.copy(Bitmap.Config.ARGB_8888, true);
+        } catch (Throwable t) {
+            Log.w(TAG, "marker overlay: bitmap copy failed: " + t.getMessage());
+            return base;
+        }
+        Canvas canvas = new Canvas(mutable);
+        // Arrow geometry: an isoceles chevron 24 px tall, 20 px wide. Origin (0,0) sits at the
+        // rider's current map position; the tip points "up" in the local frame, which we then
+        // rotate by the heading so it points in the actual direction of travel.
+        Path path = new Path();
+        path.moveTo(0f, -14f);   // tip
+        path.lineTo(11f, 10f);   // right shoulder
+        path.lineTo(0f, 4f);     // inner notch (makes the chevron read as an arrow, not a triangle)
+        path.lineTo(-11f, 10f);  // left shoulder
+        path.close();
+
+        canvas.save();
+        canvas.translate(px, py);
+        if (bearingDeg100 != Packet.Progress.MARKER_NONE) {
+            canvas.rotate(bearingDeg100 / 100f);
+        }
+        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        fill.setStyle(Paint.Style.FILL);
+        fill.setColor(Color.rgb(30, 144, 255)); // dodger-blue, high contrast against road greys
+        canvas.drawPath(path, fill);
+        Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+        stroke.setStyle(Paint.Style.STROKE);
+        stroke.setStrokeWidth(2f);
+        stroke.setColor(Color.WHITE);
+        canvas.drawPath(path, stroke);
+        canvas.restore();
+        return mutable;
     }
 
     /**

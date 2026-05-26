@@ -118,6 +118,11 @@ public final class Codec {
                 out.writeShort(pr.speedKmh & 0xffff);
                 out.writeShort(pr.remainingDistanceM & 0xffff);
                 out.writeShort(pr.etaSec & 0xffff);
+                // Marker fields are an additive extension. We always emit them; older receivers
+                // ignore the trailing bytes (see readPayload's available-check).
+                out.writeShort(encodeMarker(pr.markerPxX));
+                out.writeShort(encodeMarker(pr.markerPxY));
+                out.writeShort(encodeMarker(pr.markerBearingDeg100));
                 break;
             }
             case DISPLAY_CONFIG: {
@@ -187,8 +192,17 @@ public final class Codec {
                 int speedKmh = in.readUnsignedShort();
                 int remainingM = in.readUnsignedShort();
                 int etaSec = in.readUnsignedShort();
+                // Marker fields are appended; older payloads (16 bytes) decode as no-marker.
+                int markerPxX = Packet.Progress.MARKER_NONE;
+                int markerPxY = Packet.Progress.MARKER_NONE;
+                int markerBearing = Packet.Progress.MARKER_NONE;
+                if (in.available() >= 6) {
+                    markerPxX = decodeMarker(in.readUnsignedShort());
+                    markerPxY = decodeMarker(in.readUnsignedShort());
+                    markerBearing = decodeMarker(in.readUnsignedShort());
+                }
                 return new Packet.Progress(routeId, turnIndex, distToTurn, bearing100, speedKmh,
-                    remainingM, etaSec);
+                    remainingM, etaSec, markerPxX, markerPxY, markerBearing);
             }
             case DISPLAY_CONFIG: {
                 int topOrd = in.readUnsignedByte();
@@ -226,6 +240,16 @@ public final class Codec {
         }
         out.writeShort(bytes.length);
         out.write(bytes);
+    }
+
+    /** Encode a marker field (MARKER_NONE → 0xFFFF). Caller is responsible for clamping to uint16. */
+    private static int encodeMarker(int value) {
+        return value == Packet.Progress.MARKER_NONE ? 0xffff : (value & 0xffff);
+    }
+
+    /** Decode a marker field (0xFFFF → MARKER_NONE). */
+    private static int decodeMarker(int wire) {
+        return wire == 0xffff ? Packet.Progress.MARKER_NONE : wire;
     }
 
     private static String readPstr(DataInputStream in) throws IOException {
