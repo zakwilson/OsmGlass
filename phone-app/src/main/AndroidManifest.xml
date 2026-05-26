@@ -38,7 +38,7 @@
         android:allowBackup="true"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.GlassCycling"
+        android:theme="@style/Theme.OsmGlass"
         tools:targetApi="35">
 
         <activity

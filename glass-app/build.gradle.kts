@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.glass.glass"
+    namespace = "com.goodanser.osmglass.glass"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.glass.glass"
+        applicationId = "com.goodanser.osmglass.glass"
         minSdk = 19
         targetSdk = 19
         versionCode = 1

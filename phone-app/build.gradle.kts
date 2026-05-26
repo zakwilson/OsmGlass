@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.glass.phone"
+    namespace = "com.goodanser.osmglass.phone"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.glass.phone"
+        applicationId = "com.goodanser.osmglass.phone"
         minSdk = 24
         targetSdk = 35
         versionCode = 1

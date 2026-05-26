@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Glass Cycling</string>
+    <string name="app_name">OsmGlass</string>
     <string name="search_hint">Search destination…</string>
     <string name="start_ride">Start ride</string>
     <string name="stop_ride">Stop ride</string>
@@ -8,7 +8,7 @@
     <string name="connected">Connected</string>
     <string name="disconnected">Disconnected</string>
     <string name="route_failed">Route failed: %1$s</string>
-    <string name="ride_notification_title">Glass Cycling</string>
+    <string name="ride_notification_title">OsmGlass</string>
     <string name="ride_notification_text">Sending turn updates to Glass</string>
     <string name="ride_channel_name">Ride pipeline</string>
     <string name="search_no_results">No results</string>

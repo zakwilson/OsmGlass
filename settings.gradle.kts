@@ -20,6 +20,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "glass-cycling"
+rootProject.name = "osmglass"
 
 include(":protocol", ":phone-app", ":glass-app", ":osmand-api")
