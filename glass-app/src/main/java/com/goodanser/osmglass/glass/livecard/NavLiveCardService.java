@@ -13,6 +13,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -57,11 +58,53 @@ public class NavLiveCardService extends Service {
     private Handler mainHandler;
     private final Runnable disconnectAlertRunnable = this::showDisconnectAlert;
 
+    /**
+     * All {@code views}/{@code liveCard.setViews} access is serialized onto this single render
+     * thread so the RFCOMM reader thread never blocks on a bitmap decode + RemoteViews IPC. The
+     * reader can then drain the socket as fast as packets arrive; nav frames are conflated (see
+     * {@link #renderPendingRunnable}) so only the freshest position is ever rendered and a slow
+     * render can't build a backlog of stale frames behind the rider's real position (glass-nav-lx5).
+     */
+    private HandlerThread renderThread;
+    private Handler renderHandler;
+    /** Latest nav frame awaiting render; superseded frames are simply overwritten before the
+     *  render thread gets to them. Volatile: written on the reader thread, read on render thread. */
+    private volatile NavFrame pendingFrame;
+    private final Runnable renderPendingRunnable = this::renderPendingFrame;
+    /** Decode cache: a TurnBundle's PNG is the same byte[] instance across every Progress for that
+     *  turn (PacketDispatcher hands us the cached bundle's array), so we decode it once and reuse
+     *  the base bitmap, copying it only to stamp the moving marker. Render-thread-only state. */
+    private byte[] decodedKey;
+    private Bitmap decodedBase;
+
+    /** Immutable snapshot of one display update, queued for the render thread. */
+    private static final class NavFrame {
+        final byte[] png;
+        final String instruction;
+        final String distance;
+        final int markerPxX;
+        final int markerPxY;
+        final int markerBearingDeg100;
+
+        NavFrame(byte[] png, String instruction, String distance,
+                 int markerPxX, int markerPxY, int markerBearingDeg100) {
+            this.png = png;
+            this.instruction = instruction;
+            this.distance = distance;
+            this.markerPxX = markerPxX;
+            this.markerPxY = markerPxY;
+            this.markerBearingDeg100 = markerBearingDeg100;
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
         Log.i(TAG, "onCreate");
         mainHandler = new Handler(Looper.getMainLooper());
+        renderThread = new HandlerThread("LiveCardRender");
+        renderThread.start();
+        renderHandler = new Handler(renderThread.getLooper());
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (pm != null) {
             // SCREEN_BRIGHT_WAKE_LOCK is deprecated on modern Android but is the standard
@@ -146,26 +189,58 @@ public class NavLiveCardService extends Service {
      */
     public void updateRemoteViews(byte[] pngBytes, String instruction, String distance,
                                   int markerPxX, int markerPxY, int markerBearingDeg100) {
-        if (views == null) return;
+        if (views == null || renderHandler == null) return;
+        // Conflate: replace any not-yet-rendered frame and coalesce to a single queued render so a
+        // burst of buffered Progress packets collapses to the latest position. The reader thread
+        // returns immediately and keeps draining the socket instead of blocking on decode + IPC.
+        pendingFrame = new NavFrame(pngBytes, instruction, distance,
+            markerPxX, markerPxY, markerBearingDeg100);
+        renderHandler.removeCallbacks(renderPendingRunnable);
+        renderHandler.post(renderPendingRunnable);
+    }
+
+    /** Render the most recent {@link #pendingFrame} on the render thread. Any frames superseded
+     *  while this was queued have already been overwritten, so we only ever paint the freshest. */
+    private void renderPendingFrame() {
+        NavFrame f = pendingFrame;
+        if (f == null || views == null) return;
         // Reset any oversized "DISCONNECTED" text back to the normal instruction size — see
         // showDisconnectAlert().
         views.setFloat(R.id.instruction, "setTextSize", 22f);
-        if (pngBytes != null && pngBytes.length > 0) {
-            Bitmap bm = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.length);
-            if (bm != null) {
-                if (markerPxX != Packet.Progress.MARKER_NONE
-                    && markerPxY != Packet.Progress.MARKER_NONE) {
-                    bm = drawPositionMarker(bm, markerPxX, markerPxY, markerBearingDeg100);
+        if (f.png != null && f.png.length > 0) {
+            Bitmap base = decodeCached(f.png);
+            if (base != null) {
+                Bitmap bm = base;
+                if (f.markerPxX != Packet.Progress.MARKER_NONE
+                    && f.markerPxY != Packet.Progress.MARKER_NONE) {
+                    bm = drawPositionMarker(base, f.markerPxX, f.markerPxY, f.markerBearingDeg100);
                 }
                 views.setImageViewBitmap(R.id.snippet, bm);
             }
             hasNavContent = true;
         }
-        if (instruction != null) {
-            views.setTextViewText(R.id.instruction, instruction);
+        if (f.instruction != null) {
+            views.setTextViewText(R.id.instruction, f.instruction);
             hasNavContent = true;
         }
-        if (distance != null) views.setTextViewText(R.id.distance, distance);
+        if (f.distance != null) views.setTextViewText(R.id.distance, f.distance);
+        setViewsOnRenderThread();
+    }
+
+    /** Decode {@code png} to a base bitmap, reusing the last decode when the byte[] is the same
+     *  instance (same cached TurnBundle). Render-thread-only; not synchronized. */
+    private Bitmap decodeCached(byte[] png) {
+        if (png == decodedKey && decodedBase != null) return decodedBase;
+        Bitmap bm = BitmapFactory.decodeByteArray(png, 0, png.length);
+        if (bm != null) {
+            decodedKey = png;
+            decodedBase = bm;
+        }
+        return bm;
+    }
+
+    /** Push {@code views} to the LiveCard. Must be called on the render thread. */
+    private void setViewsOnRenderThread() {
         if (liveCard != null) {
             try {
                 liveCard.setViews(views);
@@ -243,15 +318,22 @@ public class NavLiveCardService extends Service {
                 Log.w(TAG, "disconnectWake.release failed: " + t.getMessage());
             }
         }
-        if (views != null) {
+        // Serialize the view reset onto the render thread alongside nav frames.
+        if (renderHandler != null) renderHandler.post(() -> {
+            if (views == null) return;
             views.setFloat(R.id.instruction, "setTextSize", 22f);
             views.setTextViewText(R.id.instruction, "");
-        }
+        });
     }
 
     private void showDisconnectAlert() {
         Log.w(TAG, "phone still disconnected after grace period — alerting user");
-        if (views != null) {
+        // Drop any pending nav frame and run the alert paint on the render thread so it can't be
+        // overwritten by a stale frame that was queued before the disconnect.
+        pendingFrame = null;
+        if (renderHandler != null) renderHandler.post(() -> {
+            if (views == null) return;
+            renderHandler.removeCallbacks(renderPendingRunnable);
             // Oversize the instruction TextView so DISCONNECTED reads at a glance from the riding
             // position; updateRemoteViews resets it back to 22sp on the next nav update.
             views.setFloat(R.id.instruction, "setTextSize", 48f);
@@ -266,7 +348,7 @@ public class NavLiveCardService extends Service {
                     Log.w(TAG, "liveCard.navigate failed: " + t.getMessage());
                 }
             }
-        }
+        });
         if (disconnectWake != null && !disconnectWake.isHeld()) {
             try { disconnectWake.acquire(DISCONNECT_WAKE_MS); } catch (Throwable t) {
                 Log.w(TAG, "disconnectWake.acquire failed: " + t.getMessage());
@@ -341,6 +423,17 @@ public class NavLiveCardService extends Service {
             mainHandler.removeCallbacks(disconnectAlertRunnable);
             mainHandler = null;
         }
+        if (renderHandler != null) {
+            renderHandler.removeCallbacks(renderPendingRunnable);
+            renderHandler = null;
+        }
+        if (renderThread != null) {
+            renderThread.quit();
+            renderThread = null;
+        }
+        pendingFrame = null;
+        decodedKey = null;
+        decodedBase = null;
         approachingTurnIndex = -1;
         hasNavContent = false;
         if (transport != null) {
