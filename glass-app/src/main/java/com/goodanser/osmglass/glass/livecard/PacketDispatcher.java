@@ -171,18 +171,21 @@ public final class PacketDispatcher implements Transport.Listener {
      */
     private void maybeSpeakInitialDirection(Packet.Progress pr, Packet.TurnBundle currentTurn) {
         initialDirectionSpoken = true;
-        String preamble = routeStartLabel == null || routeStartLabel.isEmpty()
-            ? "Start route" : routeStartLabel;
-        String utterance;
+        // routeStartLabel is the bare departure street name (or empty when the road is unnamed).
+        boolean haveStreet = routeStartLabel != null && !routeStartLabel.isEmpty();
         if (currentTurn.kind == com.goodanser.osmglass.protocol.TurnKind.ARRIVE) {
-            utterance = preamble + ", you have arrived";
-        } else {
-            String maneuver = TtsSpeaker.utteranceFor(
-                TtsSpeaker.Cue.IMMINENT, currentTurn.kind, currentTurn.instructionText, 0);
-            // utteranceFor(IMMINENT, ...) returns "<phrase> now"; we want just the phrase.
-            if (maneuver.endsWith(" now")) maneuver = maneuver.substring(0, maneuver.length() - 4);
-            utterance = preamble + " for " + roundToTen(pr.distanceToTurnM) + " meters, then " + maneuver;
+            speak(haveStreet ? "Head on " + routeStartLabel + ", you have arrived" : "You have arrived",
+                "initial-" + pr.routeId);
+            return;
         }
+        String maneuver = TtsSpeaker.utteranceFor(
+            TtsSpeaker.Cue.IMMINENT, currentTurn.kind, currentTurn.instructionText, 0);
+        // utteranceFor(IMMINENT, ...) returns "<phrase> now"; we want just the phrase.
+        if (maneuver.endsWith(" now")) maneuver = maneuver.substring(0, maneuver.length() - 4);
+        int meters = roundToTen(pr.distanceToTurnM);
+        String utterance = haveStreet
+            ? "Head on " + routeStartLabel + " for " + meters + " meters, then " + maneuver
+            : "In " + meters + " meters, " + maneuver;
         speak(utterance, "initial-" + pr.routeId);
     }
 
