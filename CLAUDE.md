@@ -35,6 +35,24 @@ _Add your build and test commands here_
 # npm test
 ```
 
+### Build requires a UTF-8 locale
+
+The vendored OsmAnd build (`OsmAnd/gradlew`) copies test resources with non-ASCII
+filenames (e.g. `resources/test-resources/search/ludwigstraße.json`). The JVM
+decodes filenames using `sun.jnu.encoding`, which is derived from the OS locale —
+**not** from `-Dfile.encoding`/`-Dsun.jnu.encoding` (those are ignored). Under a
+POSIX/C or non-UTF-8 code page, `:OsmAnd-java:collectTestResources` fails with
+`Failed to create MD5 hash for file '…ludwigstraße.json' as it does not exist`.
+
+- **Linux/macOS/CI:** `OsmAnd/gradlew` now self-exports `LC_ALL=C.UTF-8` when the
+  active locale isn't UTF-8 (`/etc/locale.conf` only applies to login shells, so
+  non-login/CI contexts otherwise inherit POSIX). No action needed.
+- **Windows:** a script can't change `sun.jnu.encoding` (it follows the system
+  ANSI code page / `GetACP`, which `chcp` does not affect). `OsmAnd/gradlew.bat`
+  warns if the system code page isn't UTF-8; the real fix is enabling
+  *Settings → Time & Language → Administrative language settings → "Beta: Use
+  Unicode UTF-8 for worldwide language support"* and rebooting.
+
 ## Architecture Overview
 
 _Add a brief overview of your project architecture_
