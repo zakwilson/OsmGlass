@@ -32,11 +32,20 @@ public abstract class Packet {
         public final long routeId;          // uint32, stored in low 32 bits of long
         public final int totalTurns;        // uint16
         public final String destinationLabel;
+        /** The departure instruction ("Head … on …") for the route's first leg. The producer skips
+         *  the departure direction when building TurnBundles (it isn't a maneuver), so this is the
+         *  only place Glass receives it — used to phrase the initial spoken cue. Empty when unknown. */
+        public final String startLabel;
 
         public RouteStart(long routeId, int totalTurns, String destinationLabel) {
+            this(routeId, totalTurns, destinationLabel, "");
+        }
+
+        public RouteStart(long routeId, int totalTurns, String destinationLabel, String startLabel) {
             this.routeId = routeId;
             this.totalTurns = totalTurns;
             this.destinationLabel = Objects.requireNonNull(destinationLabel);
+            this.startLabel = Objects.requireNonNull(startLabel);
         }
 
         @Override public PacketType type() { return PacketType.ROUTE_START; }
@@ -44,11 +53,15 @@ public abstract class Packet {
         @Override public boolean equals(Object o) {
             if (!(o instanceof RouteStart)) return false;
             RouteStart r = (RouteStart) o;
-            return routeId == r.routeId && totalTurns == r.totalTurns && destinationLabel.equals(r.destinationLabel);
+            return routeId == r.routeId && totalTurns == r.totalTurns
+                && destinationLabel.equals(r.destinationLabel) && startLabel.equals(r.startLabel);
         }
-        @Override public int hashCode() { return Objects.hash(routeId, totalTurns, destinationLabel); }
+        @Override public int hashCode() {
+            return Objects.hash(routeId, totalTurns, destinationLabel, startLabel);
+        }
         @Override public String toString() {
-            return "RouteStart(id=" + routeId + ", turns=" + totalTurns + ", to=" + destinationLabel + ")";
+            return "RouteStart(id=" + routeId + ", turns=" + totalTurns + ", to=" + destinationLabel
+                + ", from=" + startLabel + ")";
         }
     }
 

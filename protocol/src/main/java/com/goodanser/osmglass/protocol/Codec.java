@@ -96,6 +96,9 @@ public final class Codec {
                 out.writeInt((int) (r.routeId & 0xffffffffL));
                 out.writeShort(r.totalTurns & 0xffff);
                 writePstr(out, r.destinationLabel);
+                // startLabel is an additive extension; older receivers stop after destinationLabel
+                // and decode startLabel as "" (see readPayload's available-check).
+                writePstr(out, r.startLabel);
                 break;
             }
             case TURN_BUNDLE: {
@@ -167,7 +170,10 @@ public final class Codec {
                 long routeId = in.readInt() & 0xffffffffL;
                 int totalTurns = in.readUnsignedShort();
                 String label = readPstr(in);
-                return new Packet.RouteStart(routeId, totalTurns, label);
+                // startLabel is appended; older payloads stop after destinationLabel (a pstr needs
+                // at least its 2-byte length prefix) and decode startLabel as "".
+                String startLabel = in.available() >= 2 ? readPstr(in) : "";
+                return new Packet.RouteStart(routeId, totalTurns, label, startLabel);
             }
             case TURN_BUNDLE: {
                 long routeId = in.readInt() & 0xffffffffL;

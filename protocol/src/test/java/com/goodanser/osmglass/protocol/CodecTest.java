@@ -29,6 +29,31 @@ class CodecTest {
         assertThat(Codec.decode(Codec.encode(in))).isEqualTo(in);
     }
 
+    @Test void roundTripRouteStartWithStartLabel() throws Exception {
+        Packet.RouteStart in = new Packet.RouteStart(
+            0xCAFEBABEL, 42, "Brandenburger Tor", "Head north on Bramfelder Straße");
+        Packet.RouteStart out = (Packet.RouteStart) Codec.decode(Codec.encode(in));
+        assertThat(out).isEqualTo(in);
+        assertThat(out.startLabel).isEqualTo("Head north on Bramfelder Straße");
+    }
+
+    @Test void routeStartDecodesLegacyPayloadWithoutStartLabel() throws Exception {
+        // Synthesize a payload with only the original fields (no trailing startLabel pstr).
+        java.io.ByteArrayOutputStream payload = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(payload);
+        out.writeInt(42);                 // routeId
+        out.writeShort(5);                // totalTurns
+        byte[] dest = "Berlin".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.writeShort(dest.length);      // destinationLabel pstr
+        out.write(dest);
+        out.flush();
+        Packet.RouteStart decoded =
+            (Packet.RouteStart) Codec.decodePayload(PacketType.ROUTE_START, payload.toByteArray());
+        assertThat(decoded.routeId).isEqualTo(42L);
+        assertThat(decoded.destinationLabel).isEqualTo("Berlin");
+        assertThat(decoded.startLabel).isEqualTo("");
+    }
+
     @ParameterizedTest
     @MethodSource("turnBundleSizes")
     void roundTripTurnBundle(int pngSize) throws Exception {

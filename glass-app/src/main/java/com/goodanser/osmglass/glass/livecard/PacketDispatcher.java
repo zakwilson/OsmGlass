@@ -44,6 +44,9 @@ public final class PacketDispatcher implements Transport.Listener {
     private int lastImminentSpokenTurn = -1;
     /** Whether we've already spoken the "head north on X, then turn left in Y meters" preamble. */
     private boolean initialDirectionSpoken = false;
+    /** Departure instruction for the route, from {@link Packet.RouteStart#startLabel}; the preamble
+     *  for the initial spoken cue. Empty until a RouteStart arrives or if the phone didn't send one. */
+    private String routeStartLabel = "";
     /** Most recently received display configuration from the phone. */
     private Packet.DisplayConfig.Field topSlot = Packet.DisplayConfig.Field.TURN_INSTRUCTION;
     private Packet.DisplayConfig.Field bottomSlot = Packet.DisplayConfig.Field.DISTANCE_TO_TURN;
@@ -66,6 +69,7 @@ public final class PacketDispatcher implements Transport.Listener {
             Packet.RouteStart rs = (Packet.RouteStart) p;
             Log.i(TAG, "ROUTE_START id=" + rs.routeId + " turns=" + rs.totalTurns);
             currentRouteId = rs.routeId;
+            routeStartLabel = rs.startLabel;
             cache.clear();
             lastApproachSpokenTurn = -1;
             lastImminentSpokenTurn = -1;
@@ -81,13 +85,18 @@ public final class PacketDispatcher implements Transport.Listener {
             Packet.TurnBundle tb = (Packet.TurnBundle) p;
             Log.d(TAG, "TURN_BUNDLE #" + tb.turnIndex + " " + tb.kind + " (" + tb.pngBytes.length + "B)");
             cache.put(key(tb.routeId, tb.turnIndex), tb);
-            maybeSpeakInitialDirection(tb.routeId);
         } else if (p instanceof Packet.Progress) {
             Packet.Progress pr = (Packet.Progress) p;
             Packet.TurnBundle tb = cache.get(key(pr.routeId, pr.turnIndex));
             if (tb == null) {
                 Log.d(TAG, "PROGRESS without cached TURN_BUNDLE for #" + pr.turnIndex);
                 return;
+            }
+            // First PROGRESS with a cached bundle: speak the one-time route-start cue, keyed to the
+            // turn the rider is actually approaching (the phone ships it first) rather than the
+            // already-passed leading turns.
+            if (!initialDirectionSpoken) {
+                maybeSpeakInitialDirection(pr, tb);
             }
             // If the active turn index advanced, the previous turn has been passed — release the
             // display before deciding whether to wake for the new turn.
@@ -153,29 +162,28 @@ public final class PacketDispatcher implements Transport.Listener {
     }
 
     /**
-     * On the first non-START TurnBundle (typically index 1), build a "Head [start instruction] for
-     * X meters, then [first maneuver]" announcement and speak it once. Falls back gracefully if the
-     * START bundle hasn't arrived yet or if the route has only a START + ARRIVE pair.
+     * Speak the one-time route-start cue: the departure instruction (from
+     * {@link Packet.RouteStart#startLabel}) plus the maneuver the rider is approaching. Called from
+     * the first PROGRESS that resolves a cached bundle, so {@code currentTurn} is the live upcoming
+     * turn and {@code pr.distanceToTurnM} its live distance — no dependency on the already-passed
+     * leading turns (which the phone now ships last). Falls back to "Start route" when the phone
+     * didn't supply a departure label.
      */
-    private void maybeSpeakInitialDirection(long routeId) {
-        if (initialDirectionSpoken) return;
-        Packet.TurnBundle start = cache.get(key(routeId, 0));
-        Packet.TurnBundle first = cache.get(key(routeId, 1));
-        if (start == null || first == null) return;
+    private void maybeSpeakInitialDirection(Packet.Progress pr, Packet.TurnBundle currentTurn) {
         initialDirectionSpoken = true;
-        String preamble = start.instructionText == null || start.instructionText.isEmpty()
-            ? "Start route" : start.instructionText;
+        String preamble = routeStartLabel == null || routeStartLabel.isEmpty()
+            ? "Start route" : routeStartLabel;
         String utterance;
-        if (first.kind == com.goodanser.osmglass.protocol.TurnKind.ARRIVE) {
-            utterance = preamble + " for " + first.distanceFromStartM + " meters, you have arrived";
+        if (currentTurn.kind == com.goodanser.osmglass.protocol.TurnKind.ARRIVE) {
+            utterance = preamble + ", you have arrived";
         } else {
             String maneuver = TtsSpeaker.utteranceFor(
-                TtsSpeaker.Cue.IMMINENT, first.kind, first.instructionText, 0);
+                TtsSpeaker.Cue.IMMINENT, currentTurn.kind, currentTurn.instructionText, 0);
             // utteranceFor(IMMINENT, ...) returns "<phrase> now"; we want just the phrase.
             if (maneuver.endsWith(" now")) maneuver = maneuver.substring(0, maneuver.length() - 4);
-            utterance = preamble + " for " + first.distanceFromStartM + " meters, then " + maneuver;
+            utterance = preamble + " for " + roundToTen(pr.distanceToTurnM) + " meters, then " + maneuver;
         }
-        speak(utterance, "initial-" + routeId);
+        speak(utterance, "initial-" + pr.routeId);
     }
 
     /** Forward an utterance to the service unless the phone has muted Glass-side TTS. */
