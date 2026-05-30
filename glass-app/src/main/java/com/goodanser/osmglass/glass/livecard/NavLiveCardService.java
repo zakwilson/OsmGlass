@@ -76,6 +76,18 @@ public class NavLiveCardService extends Service {
      *  the base bitmap, copying it only to stamp the moving marker. Render-thread-only state. */
     private byte[] decodedKey;
     private Bitmap decodedBase;
+    /** Single reused canvas-backed buffer holding the composited snippet (base map + marker). Kept
+     *  for the service lifetime so the RemoteViews never holds more than one snippet bitmap and the
+     *  render path makes no per-frame ~900 KB allocation (glass-nav). Render-thread-only. */
+    private Bitmap snippetBuffer;
+    /** Retained display state, re-applied to a fresh RemoteViews on every push (see renderViews).
+     *  NavFrame fields may be null meaning "unchanged", so we carry the last value forward. */
+    private String dispInstruction = "";
+    private String dispDistance = "";
+    private float dispTextSize = 22f;
+    /** When true the snippet shows a flat black fill (disconnect alert / initial) rather than the
+     *  composited map buffer. */
+    private boolean snippetBlack = true;
 
     /** Immutable snapshot of one display update, queued for the render thread. */
     private static final class NavFrame {
@@ -204,27 +216,22 @@ public class NavLiveCardService extends Service {
     private void renderPendingFrame() {
         NavFrame f = pendingFrame;
         if (f == null || views == null) return;
-        // Reset any oversized "DISCONNECTED" text back to the normal instruction size — see
-        // showDisconnectAlert().
-        views.setFloat(R.id.instruction, "setTextSize", 22f);
+        // A nav frame always uses the normal instruction size — reset any oversized "DISCONNECTED"
+        // text left by showDisconnectAlert().
+        dispTextSize = 22f;
         if (f.png != null && f.png.length > 0) {
             Bitmap base = decodeCached(f.png);
-            if (base != null) {
-                Bitmap bm = base;
-                if (f.markerPxX != Packet.Progress.MARKER_NONE
-                    && f.markerPxY != Packet.Progress.MARKER_NONE) {
-                    bm = drawPositionMarker(base, f.markerPxX, f.markerPxY, f.markerBearingDeg100);
-                }
-                views.setImageViewBitmap(R.id.snippet, bm);
+            if (base != null && compositeSnippet(base, f.markerPxX, f.markerPxY, f.markerBearingDeg100)) {
+                snippetBlack = false;
             }
             hasNavContent = true;
         }
         if (f.instruction != null) {
-            views.setTextViewText(R.id.instruction, f.instruction);
+            dispInstruction = f.instruction;
             hasNavContent = true;
         }
-        if (f.distance != null) views.setTextViewText(R.id.distance, f.distance);
-        setViewsOnRenderThread();
+        if (f.distance != null) dispDistance = f.distance;
+        renderViews();
     }
 
     /** Decode {@code png} to a base bitmap, reusing the last decode when the byte[] is the same
@@ -233,17 +240,63 @@ public class NavLiveCardService extends Service {
         if (png == decodedKey && decodedBase != null) return decodedBase;
         Bitmap bm = BitmapFactory.decodeByteArray(png, 0, png.length);
         if (bm != null) {
+            // Free the previous turn's base before holding the new one. The base is only ever used
+            // as a blit source for the snippet buffer — it is never handed to a RemoteViews — so
+            // recycling it here is safe and keeps decoded bitmaps from piling up on the small Glass
+            // heap across turn changes (glass-nav).
+            if (decodedBase != null && decodedBase != bm) decodedBase.recycle();
             decodedKey = png;
             decodedBase = bm;
         }
         return bm;
     }
 
-    /** Push {@code views} to the LiveCard. Must be called on the render thread. */
-    private void setViewsOnRenderThread() {
+    /** Composite {@code base} (and, when present, the position marker) into the reused
+     *  {@link #snippetBuffer}. Returns false if the buffer can't be (re)allocated, in which case the
+     *  caller keeps the previous snippet rather than crashing. Render-thread-only. */
+    private boolean compositeSnippet(Bitmap base, int px, int py, int bearingDeg100) {
+        if (snippetBuffer == null
+                || snippetBuffer.getWidth() != base.getWidth()
+                || snippetBuffer.getHeight() != base.getHeight()) {
+            Bitmap old = snippetBuffer;
+            try {
+                snippetBuffer = Bitmap.createBitmap(base.getWidth(), base.getHeight(),
+                    Bitmap.Config.ARGB_8888);
+            } catch (Throwable t) {
+                Log.w(TAG, "snippet buffer alloc failed: " + t.getMessage());
+                snippetBuffer = old;
+                return false;
+            }
+            if (old != null) old.recycle();
+        }
+        Canvas canvas = new Canvas(snippetBuffer);
+        // base is an opaque, full-size map snippet, so drawing it overwrites the previous frame's
+        // pixels (including the old marker) — no separate clear needed.
+        canvas.drawBitmap(base, 0f, 0f, null);
+        if (px != Packet.Progress.MARKER_NONE && py != Packet.Progress.MARKER_NONE) {
+            drawMarker(canvas, px, py, bearingDeg100);
+        }
+        return true;
+    }
+
+    /** Build a fresh RemoteViews from the retained display state and push it to the LiveCard. A
+     *  fresh instance each push is deliberate: a reused RemoteViews accumulates every bitmap and
+     *  action in internal caches and re-parcels them on each setViews, which on the small Glass
+     *  heap grew unbounded until decode OOM'd (glass-nav). Must be called on the render thread. */
+    private void renderViews() {
+        RemoteViews v = new RemoteViews(getPackageName(), R.layout.livecard_nav);
+        v.setFloat(R.id.instruction, "setTextSize", dispTextSize);
+        v.setTextViewText(R.id.instruction, dispInstruction);
+        v.setTextViewText(R.id.distance, dispDistance);
+        if (snippetBlack || snippetBuffer == null) {
+            v.setImageViewResource(R.id.snippet, android.R.color.black);
+        } else {
+            v.setImageViewBitmap(R.id.snippet, snippetBuffer);
+        }
+        views = v;
         if (liveCard != null) {
             try {
-                liveCard.setViews(views);
+                liveCard.setViews(v);
             } catch (Throwable t) {
                 Log.w(TAG, "setViews failed: " + t.getMessage());
             }
@@ -251,22 +304,13 @@ public class NavLiveCardService extends Service {
     }
 
     /**
-     * Composite a position-arrow marker on a copy of [base]. The marker is a filled chevron
+     * Draw a position-arrow marker onto {@code canvas} at (px, py). The marker is a filled chevron
      * pointing up the bearing, with a thin white border so it reads against any underlying
-     * map color. Returns the original bitmap on copy failure (better to show no marker than
-     * to drop the whole snippet update).
+     * map color.
      *
      * Visible for testing.
      */
-    static Bitmap drawPositionMarker(Bitmap base, int px, int py, int bearingDeg100) {
-        Bitmap mutable;
-        try {
-            mutable = base.copy(Bitmap.Config.ARGB_8888, true);
-        } catch (Throwable t) {
-            Log.w(TAG, "marker overlay: bitmap copy failed: " + t.getMessage());
-            return base;
-        }
-        Canvas canvas = new Canvas(mutable);
+    static void drawMarker(Canvas canvas, int px, int py, int bearingDeg100) {
         // Arrow geometry: an isoceles chevron 48 px tall, 44 px wide. Origin (0,0) sits at the
         // rider's current map position; the tip points "up" in the local frame, which we then
         // rotate by the heading so it points in the actual direction of travel.
@@ -292,7 +336,6 @@ public class NavLiveCardService extends Service {
         stroke.setColor(Color.WHITE);
         canvas.drawPath(path, stroke);
         canvas.restore();
-        return mutable;
     }
 
     /**
@@ -321,8 +364,9 @@ public class NavLiveCardService extends Service {
         // Serialize the view reset onto the render thread alongside nav frames.
         if (renderHandler != null) renderHandler.post(() -> {
             if (views == null) return;
-            views.setFloat(R.id.instruction, "setTextSize", 22f);
-            views.setTextViewText(R.id.instruction, "");
+            dispTextSize = 22f;
+            dispInstruction = "";
+            renderViews();
         });
     }
 
@@ -335,15 +379,13 @@ public class NavLiveCardService extends Service {
             if (views == null) return;
             renderHandler.removeCallbacks(renderPendingRunnable);
             // Oversize the instruction TextView so DISCONNECTED reads at a glance from the riding
-            // position; updateRemoteViews resets it back to 22sp on the next nav update.
-            views.setFloat(R.id.instruction, "setTextSize", 48f);
-            views.setTextViewText(R.id.instruction, "DISCONNECTED");
-            views.setTextViewText(R.id.distance, "");
-            views.setImageViewResource(R.id.snippet, android.R.color.black);
+            // position; renderPendingFrame resets it back to 22sp on the next nav update.
+            dispTextSize = 48f;
+            dispInstruction = "DISCONNECTED";
+            dispDistance = "";
+            snippetBlack = true;
+            renderViews();
             if (liveCard != null) {
-                try { liveCard.setViews(views); } catch (Throwable t) {
-                    Log.w(TAG, "setViews failed: " + t.getMessage());
-                }
                 try { liveCard.navigate(); } catch (Throwable t) {
                     Log.w(TAG, "liveCard.navigate failed: " + t.getMessage());
                 }
@@ -433,7 +475,8 @@ public class NavLiveCardService extends Service {
         }
         pendingFrame = null;
         decodedKey = null;
-        decodedBase = null;
+        if (decodedBase != null) { decodedBase.recycle(); decodedBase = null; }
+        if (snippetBuffer != null) { snippetBuffer.recycle(); snippetBuffer = null; }
         approachingTurnIndex = -1;
         hasNavContent = false;
         if (transport != null) {
