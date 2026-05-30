@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Live-card menu, drawn translucently over the map. A single "Stop navigation" label, rendered
+    in white with a black halo (zero-offset shadow, wide radius) so it stays readable over any map
+    tile — the framework options menu drew unstyled text that vanished against dark night tiles and
+    ignored theme-level text-shadow styling.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <TextView
+        android:id="@+id/menu_stop_nav"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:drawableLeft="@android:drawable/ic_menu_close_clear_cancel"
+        android:drawablePadding="16dp"
+        android:text="@string/menu_stop_nav"
+        android:textColor="@android:color/white"
+        android:textSize="40sp"
+        android:shadowColor="@android:color/black"
+        android:shadowDx="0.0"
+        android:shadowDy="0.0"
+        android:shadowRadius="15.0" />
+
+</FrameLayout>
