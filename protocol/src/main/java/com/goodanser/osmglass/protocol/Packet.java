@@ -172,9 +172,9 @@ public abstract class Packet {
     }
 
     /**
-     * Phone → Glass: which data field each Glass display slot should render. Sent on connect and
-     * whenever the user changes their selection. Glass stores the most recent config and applies it
-     * to subsequent updates.
+     * Phone → Glass: which data field each of the four Glass display corners should render. Sent on
+     * connect and whenever the user changes their selection. Glass stores the most recent config and
+     * applies it to subsequent updates. A corner set to {@link Field#NONE} renders blank.
      */
     public static final class DisplayConfig extends Packet {
         public enum Field {
@@ -182,7 +182,9 @@ public abstract class Packet {
             DISTANCE_TO_TURN,
             REMAINING_DISTANCE,
             ETA,
-            SPEED;
+            ARRIVAL_TIME,
+            SPEED,
+            NONE;
             public static Field fromCode(int b) throws ProtocolException {
                 Field[] vs = values();
                 if (b < 0 || b >= vs.length) throw new ProtocolException("unknown DisplayConfig field " + b);
@@ -190,19 +192,24 @@ public abstract class Packet {
             }
         }
 
-        public final Field topSlot;
-        public final Field bottomSlot;
+        public final Field topLeft;
+        public final Field topRight;
+        public final Field bottomLeft;
+        public final Field bottomRight;
         /** If true, the Glass dispatcher suppresses all TTS announcements. Lets the user rely on
          *  OsmAnd's phone-side voice (e.g. via bone-conduction headphones) without doubling up. */
         public final boolean muteTts;
 
-        public DisplayConfig(Field topSlot, Field bottomSlot) {
-            this(topSlot, bottomSlot, false);
+        public DisplayConfig(Field topLeft, Field topRight, Field bottomLeft, Field bottomRight) {
+            this(topLeft, topRight, bottomLeft, bottomRight, false);
         }
 
-        public DisplayConfig(Field topSlot, Field bottomSlot, boolean muteTts) {
-            this.topSlot = Objects.requireNonNull(topSlot);
-            this.bottomSlot = Objects.requireNonNull(bottomSlot);
+        public DisplayConfig(Field topLeft, Field topRight, Field bottomLeft, Field bottomRight,
+                             boolean muteTts) {
+            this.topLeft = Objects.requireNonNull(topLeft);
+            this.topRight = Objects.requireNonNull(topRight);
+            this.bottomLeft = Objects.requireNonNull(bottomLeft);
+            this.bottomRight = Objects.requireNonNull(bottomRight);
             this.muteTts = muteTts;
         }
 
@@ -211,11 +218,16 @@ public abstract class Packet {
         @Override public boolean equals(Object o) {
             if (!(o instanceof DisplayConfig)) return false;
             DisplayConfig d = (DisplayConfig) o;
-            return topSlot == d.topSlot && bottomSlot == d.bottomSlot && muteTts == d.muteTts;
+            return topLeft == d.topLeft && topRight == d.topRight
+                && bottomLeft == d.bottomLeft && bottomRight == d.bottomRight
+                && muteTts == d.muteTts;
         }
-        @Override public int hashCode() { return Objects.hash(topSlot, bottomSlot, muteTts); }
+        @Override public int hashCode() {
+            return Objects.hash(topLeft, topRight, bottomLeft, bottomRight, muteTts);
+        }
         @Override public String toString() {
-            return "DisplayConfig(top=" + topSlot + ", bottom=" + bottomSlot + ", muteTts=" + muteTts + ")";
+            return "DisplayConfig(tl=" + topLeft + ", tr=" + topRight + ", bl=" + bottomLeft
+                + ", br=" + bottomRight + ", muteTts=" + muteTts + ")";
         }
     }
 

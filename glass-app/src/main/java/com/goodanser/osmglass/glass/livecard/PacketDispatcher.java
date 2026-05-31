@@ -10,11 +10,11 @@ import java.util.Map;
 
 /**
  * Receives packets from the {@code Transport} and updates the LiveCard via
- * {@link NavLiveCardService#updateRemoteViews(byte[], String, String)}.
+ * {@link NavLiveCardService#updateRemoteViews(byte[], String, String, String, String, int, int, int)}.
  *
  * Caches {@link Packet.TurnBundle}s by (routeId, turnIndex). When a {@link Packet.Progress}
- * arrives, looks up the corresponding cached bundle and pushes its snippet + instruction +
- * formatted distance to the LiveCard.
+ * arrives, looks up the corresponding cached bundle and pushes its snippet + the four configured
+ * corner fields to the LiveCard.
  */
 public final class PacketDispatcher implements Transport.Listener {
     private static final String TAG = "PacketDispatcher";
@@ -47,9 +47,11 @@ public final class PacketDispatcher implements Transport.Listener {
     /** Departure instruction for the route, from {@link Packet.RouteStart#startLabel}; the preamble
      *  for the initial spoken cue. Empty until a RouteStart arrives or if the phone didn't send one. */
     private String routeStartLabel = "";
-    /** Most recently received display configuration from the phone. */
-    private Packet.DisplayConfig.Field topSlot = Packet.DisplayConfig.Field.TURN_INSTRUCTION;
-    private Packet.DisplayConfig.Field bottomSlot = Packet.DisplayConfig.Field.DISTANCE_TO_TURN;
+    /** Most recently received display configuration from the phone — one field per screen corner. */
+    private Packet.DisplayConfig.Field topLeft = Packet.DisplayConfig.Field.TURN_INSTRUCTION;
+    private Packet.DisplayConfig.Field topRight = Packet.DisplayConfig.Field.NONE;
+    private Packet.DisplayConfig.Field bottomLeft = Packet.DisplayConfig.Field.DISTANCE_TO_TURN;
+    private Packet.DisplayConfig.Field bottomRight = Packet.DisplayConfig.Field.NONE;
     /** When true, all TTS announcements (approach, imminent, initial direction, turn alerts) are
      *  suppressed. Set by {@link Packet.DisplayConfig#muteTts} pushed from the phone. */
     private boolean muteTts = false;
@@ -61,7 +63,7 @@ public final class PacketDispatcher implements Transport.Listener {
     @Override public void onConnected() {
         Log.i(TAG, "connected");
         service.onTransportConnected();
-        service.updateRemoteViews(null, null, "");
+        service.showStatus("");
     }
 
     @Override public void onPacket(Packet p) {
@@ -76,10 +78,12 @@ public final class PacketDispatcher implements Transport.Listener {
             initialDirectionSpoken = false;
         } else if (p instanceof Packet.DisplayConfig) {
             Packet.DisplayConfig dc = (Packet.DisplayConfig) p;
-            Log.i(TAG, "DISPLAY_CONFIG top=" + dc.topSlot + " bottom=" + dc.bottomSlot
-                + " muteTts=" + dc.muteTts);
-            topSlot = dc.topSlot;
-            bottomSlot = dc.bottomSlot;
+            Log.i(TAG, "DISPLAY_CONFIG tl=" + dc.topLeft + " tr=" + dc.topRight
+                + " bl=" + dc.bottomLeft + " br=" + dc.bottomRight + " muteTts=" + dc.muteTts);
+            topLeft = dc.topLeft;
+            topRight = dc.topRight;
+            bottomLeft = dc.bottomLeft;
+            bottomRight = dc.bottomRight;
             muteTts = dc.muteTts;
         } else if (p instanceof Packet.TurnBundle) {
             Packet.TurnBundle tb = (Packet.TurnBundle) p;
@@ -121,15 +125,18 @@ public final class PacketDispatcher implements Transport.Listener {
                     TtsSpeaker.utteranceFor(TtsSpeaker.Cue.IMMINENT, tb.kind, tb.instructionText, IMMINENT_THRESHOLD_M),
                     "imminent-" + pr.turnIndex);
             }
-            String top = renderField(topSlot, pr, tb);
-            String bottom = renderField(bottomSlot, pr, tb);
-            Log.i(TAG, "PROGRESS #" + pr.turnIndex + " top=" + top + " bottom=" + bottom
+            String tl = renderField(topLeft, pr, tb);
+            String tr = renderField(topRight, pr, tb);
+            String bl = renderField(bottomLeft, pr, tb);
+            String br = renderField(bottomRight, pr, tb);
+            Log.i(TAG, "PROGRESS #" + pr.turnIndex + " tl=" + tl + " tr=" + tr
+                + " bl=" + bl + " br=" + br
                 + " marker=" + (pr.markerPxX == Packet.Progress.MARKER_NONE
                     ? "none"
                     : ("(" + pr.markerPxX + "," + pr.markerPxY + ","
                         + (pr.markerBearingDeg100 / 100.0) + "°)")));
             service.updateRemoteViews(
-                tb.pngBytes, top, bottom,
+                tb.pngBytes, tl, tr, bl, br,
                 pr.markerPxX, pr.markerPxY, pr.markerBearingDeg100);
         } else if (p instanceof Packet.TurnAlert) {
             Packet.TurnAlert a = (Packet.TurnAlert) p;
@@ -146,7 +153,7 @@ public final class PacketDispatcher implements Transport.Listener {
             lastApproachSpokenTurn = -1;
             lastImminentSpokenTurn = -1;
             String message = (re.reason == Packet.RouteEnd.Reason.OFFROUTE) ? "Rerouting…" : "Done";
-            service.updateRemoteViews(null, message, "");
+            service.showStatus(message);
             cache.clear();
             currentRouteId = -1;
         }
@@ -209,11 +216,26 @@ public final class PacketDispatcher implements Transport.Listener {
                 return formatDistance(pr.remainingDistanceM);
             case ETA:
                 return formatDuration(pr.etaSec);
+            case ARRIVAL_TIME:
+                return formatArrivalClock(pr.etaSec);
             case SPEED:
                 return pr.speedKmh + " km/h";
+            case NONE:
             default:
                 return "";
         }
+    }
+
+    /**
+     * Wall-clock arrival time = now + {@code etaSec}, formatted in the device's 12/24-hour
+     * preference (e.g. "3:45 PM" or "15:45"). Distinct from {@link Packet.DisplayConfig.Field#ETA},
+     * which shows the remaining duration. Computed Glass-side: each PROGRESS carries a fresh
+     * etaSec and we anchor it to the current clock at render time, so no extra wire field is needed.
+     */
+    private String formatArrivalClock(int etaSec) {
+        long arrivalMs = System.currentTimeMillis() + etaSec * 1000L;
+        return android.text.format.DateFormat.getTimeFormat(service)
+            .format(new java.util.Date(arrivalMs));
     }
 
     private static String formatDuration(int seconds) {

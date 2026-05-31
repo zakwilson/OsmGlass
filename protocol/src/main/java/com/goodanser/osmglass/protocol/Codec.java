@@ -130,8 +130,10 @@ public final class Codec {
             }
             case DISPLAY_CONFIG: {
                 Packet.DisplayConfig d = (Packet.DisplayConfig) p;
-                out.writeByte(d.topSlot.ordinal() & 0xff);
-                out.writeByte(d.bottomSlot.ordinal() & 0xff);
+                out.writeByte(d.topLeft.ordinal() & 0xff);
+                out.writeByte(d.topRight.ordinal() & 0xff);
+                out.writeByte(d.bottomLeft.ordinal() & 0xff);
+                out.writeByte(d.bottomRight.ordinal() & 0xff);
                 out.writeByte(d.muteTts ? 1 : 0);
                 break;
             }
@@ -211,13 +213,17 @@ public final class Codec {
                     remainingM, etaSec, markerPxX, markerPxY, markerBearing);
             }
             case DISPLAY_CONFIG: {
-                int topOrd = in.readUnsignedByte();
-                int bottomOrd = in.readUnsignedByte();
-                // muteTts flag is appended; older payloads (2 bytes) decode as muteTts=false.
+                int tlOrd = in.readUnsignedByte();
+                int trOrd = in.readUnsignedByte();
+                int blOrd = in.readUnsignedByte();
+                int brOrd = in.readUnsignedByte();
+                // muteTts flag is appended; payloads without it decode as muteTts=false.
                 boolean muteTts = in.available() > 0 && in.readUnsignedByte() != 0;
                 return new Packet.DisplayConfig(
-                    Packet.DisplayConfig.Field.fromCode(topOrd),
-                    Packet.DisplayConfig.Field.fromCode(bottomOrd),
+                    Packet.DisplayConfig.Field.fromCode(tlOrd),
+                    Packet.DisplayConfig.Field.fromCode(trOrd),
+                    Packet.DisplayConfig.Field.fromCode(blOrd),
+                    Packet.DisplayConfig.Field.fromCode(brOrd),
                     muteTts);
             }
             case TURN_ALERT: {

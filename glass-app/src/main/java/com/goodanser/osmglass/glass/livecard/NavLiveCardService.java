@@ -18,6 +18,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
+import android.view.View;
 import android.widget.RemoteViews;
 
 import com.google.android.glass.timeline.LiveCard;
@@ -80,29 +81,45 @@ public class NavLiveCardService extends Service {
      *  for the service lifetime so the RemoteViews never holds more than one snippet bitmap and the
      *  render path makes no per-frame ~900 KB allocation (glass-nav). Render-thread-only. */
     private Bitmap snippetBuffer;
-    /** Retained display state, re-applied to a fresh RemoteViews on every push (see renderViews).
-     *  NavFrame fields may be null meaning "unchanged", so we carry the last value forward. */
-    private String dispInstruction = "";
-    private String dispDistance = "";
+    /** Retained corner display state, re-applied to a fresh RemoteViews on every push (see
+     *  renderViews). NavFrame fields may be null meaning "unchanged", so we carry the last value
+     *  forward. */
+    private String dispTopLeft = "";
+    private String dispTopRight = "";
+    private String dispBottomLeft = "";
+    private String dispBottomRight = "";
+    /** Centered status/alert message ("Done", "Rerouting…", "DISCONNECTED"), shown over the corners
+     *  when non-empty. Cleared on the next nav frame. */
+    private String dispStatus = "";
     private float dispTextSize = 22f;
     /** When true the snippet shows a flat black fill (disconnect alert / initial) rather than the
      *  composited map buffer. */
     private boolean snippetBlack = true;
+    /** Whether the current snippet is a light/day map. Decided from the snippet's average luminance
+     *  in {@link #decodeCached} (the phone renders the PNG in its own day/night theme, so the bitmap
+     *  brightness is the signal — no extra wire field needed). When true, renderViews shows the
+     *  dark-text/light-halo corner variants; when false, the light-text/dark-halo ones. Defaults to
+     *  false so the unchanged dark-mode look is used until the first map frame (glass-nav-5um). */
+    private boolean dispLightMode = false;
 
     /** Immutable snapshot of one display update, queued for the render thread. */
     private static final class NavFrame {
         final byte[] png;
-        final String instruction;
-        final String distance;
+        final String topLeft;
+        final String topRight;
+        final String bottomLeft;
+        final String bottomRight;
         final int markerPxX;
         final int markerPxY;
         final int markerBearingDeg100;
 
-        NavFrame(byte[] png, String instruction, String distance,
+        NavFrame(byte[] png, String topLeft, String topRight, String bottomLeft, String bottomRight,
                  int markerPxX, int markerPxY, int markerBearingDeg100) {
             this.png = png;
-            this.instruction = instruction;
-            this.distance = distance;
+            this.topLeft = topLeft;
+            this.topRight = topRight;
+            this.bottomLeft = bottomLeft;
+            this.bottomRight = bottomRight;
             this.markerPxX = markerPxX;
             this.markerPxY = markerPxY;
             this.markerBearingDeg100 = markerBearingDeg100;
@@ -184,28 +201,43 @@ public class NavLiveCardService extends Service {
     }
 
     /**
-     * Overload without a position marker — used for transport-state updates (clearing on
-     * connect, "Done"/"Rerouting…" on RouteEnd).
+     * Shows a centered status/alert message ("Done", "Rerouting…") over a black card, clearing the
+     * corner fields. Used for transport-state updates: pass "" to clear (e.g. on connect, while
+     * fresh nav packets are en route).
      */
-    public void updateRemoteViews(byte[] pngBytes, String instruction, String distance) {
-        updateRemoteViews(pngBytes, instruction, distance,
-            Packet.Progress.MARKER_NONE, Packet.Progress.MARKER_NONE, Packet.Progress.MARKER_NONE);
+    public void showStatus(String message) {
+        if (views == null || renderHandler == null) return;
+        // Drop any not-yet-rendered nav frame so a stale position can't overwrite the status.
+        pendingFrame = null;
+        renderHandler.removeCallbacks(renderPendingRunnable);
+        renderHandler.post(() -> {
+            if (views == null) return;
+            dispTextSize = 22f;
+            dispStatus = message == null ? "" : message;
+            dispTopLeft = "";
+            dispTopRight = "";
+            dispBottomLeft = "";
+            dispBottomRight = "";
+            snippetBlack = true;
+            renderViews();
+        });
     }
 
     /**
-     * Called by {@code PacketDispatcher} when a new snippet/text/distance update arrives. When
+     * Called by {@code PacketDispatcher} when a new snippet + corner-field update arrives. When
      * the marker fields are not {@link Packet.Progress#MARKER_NONE} the snippet is composited
      * with a position arrow at the given pixel coordinates rotated by the given bearing — the
      * phone has already done the geo-to-pixel projection, so we just paint at (markerPxX,
      * markerPxY).
      */
-    public void updateRemoteViews(byte[] pngBytes, String instruction, String distance,
+    public void updateRemoteViews(byte[] pngBytes, String topLeft, String topRight,
+                                  String bottomLeft, String bottomRight,
                                   int markerPxX, int markerPxY, int markerBearingDeg100) {
         if (views == null || renderHandler == null) return;
         // Conflate: replace any not-yet-rendered frame and coalesce to a single queued render so a
         // burst of buffered Progress packets collapses to the latest position. The reader thread
         // returns immediately and keeps draining the socket instead of blocking on decode + IPC.
-        pendingFrame = new NavFrame(pngBytes, instruction, distance,
+        pendingFrame = new NavFrame(pngBytes, topLeft, topRight, bottomLeft, bottomRight,
             markerPxX, markerPxY, markerBearingDeg100);
         renderHandler.removeCallbacks(renderPendingRunnable);
         renderHandler.post(renderPendingRunnable);
@@ -216,9 +248,10 @@ public class NavLiveCardService extends Service {
     private void renderPendingFrame() {
         NavFrame f = pendingFrame;
         if (f == null || views == null) return;
-        // A nav frame always uses the normal instruction size — reset any oversized "DISCONNECTED"
-        // text left by showDisconnectAlert().
+        // A nav frame clears any centered status ("DISCONNECTED"/"Done") and its oversized text size
+        // left by showDisconnectAlert()/showStatus().
         dispTextSize = 22f;
+        dispStatus = "";
         if (f.png != null && f.png.length > 0) {
             Bitmap base = decodeCached(f.png);
             if (base != null && compositeSnippet(base, f.markerPxX, f.markerPxY, f.markerBearingDeg100)) {
@@ -226,11 +259,13 @@ public class NavLiveCardService extends Service {
             }
             hasNavContent = true;
         }
-        if (f.instruction != null) {
-            dispInstruction = f.instruction;
+        if (f.topLeft != null) {
+            dispTopLeft = f.topLeft;
             hasNavContent = true;
         }
-        if (f.distance != null) dispDistance = f.distance;
+        if (f.topRight != null) dispTopRight = f.topRight;
+        if (f.bottomLeft != null) dispBottomLeft = f.bottomLeft;
+        if (f.bottomRight != null) dispBottomRight = f.bottomRight;
         renderViews();
     }
 
@@ -247,8 +282,36 @@ public class NavLiveCardService extends Service {
             if (decodedBase != null && decodedBase != bm) decodedBase.recycle();
             decodedKey = png;
             decodedBase = bm;
+            // Re-evaluate light/dark only when the underlying map changes (once per turn, not per
+            // Progress) since the marker composite doesn't alter the map's overall brightness.
+            dispLightMode = isLightSnippet(bm);
         }
         return bm;
+    }
+
+    /** Decide whether {@code bm} is a light/day map by averaging the luminance of a sparse pixel
+     *  grid (~16×16 samples) and comparing to mid-grey. Cheap enough to run once per turn on the
+     *  render thread; {@link Bitmap#getPixel} on a few hundred points avoids a full-bitmap copy. */
+    private static boolean isLightSnippet(Bitmap bm) {
+        int w = bm.getWidth();
+        int h = bm.getHeight();
+        if (w <= 0 || h <= 0) return false;
+        int stepX = Math.max(1, w / 16);
+        int stepY = Math.max(1, h / 16);
+        long sum = 0;
+        int n = 0;
+        for (int y = 0; y < h; y += stepY) {
+            for (int x = 0; x < w; x += stepX) {
+                int c = bm.getPixel(x, y);
+                int r = (c >> 16) & 0xff;
+                int g = (c >> 8) & 0xff;
+                int b = c & 0xff;
+                // Rec. 601 luma, integer-weighted (0.299/0.587/0.114 ≈ 77/150/29 over 256).
+                sum += (r * 77 + g * 150 + b * 29) >> 8;
+                n++;
+            }
+        }
+        return n > 0 && (sum / n) >= 128;
     }
 
     /** Composite {@code base} (and, when present, the position marker) into the reused
@@ -279,15 +342,29 @@ public class NavLiveCardService extends Service {
         return true;
     }
 
+    /** Set one corner's text on both its dark- and light-map TextView variants and show whichever
+     *  matches {@link #dispLightMode}, hiding the other. RemoteViews can't recolor the blur halo at
+     *  runtime, so the contrast flip is a visibility toggle between the two pre-styled views. */
+    private void applyCorner(RemoteViews v, int darkId, int lightId, String text) {
+        v.setTextViewText(darkId, text);
+        v.setTextViewText(lightId, text);
+        v.setViewVisibility(darkId, dispLightMode ? View.GONE : View.VISIBLE);
+        v.setViewVisibility(lightId, dispLightMode ? View.VISIBLE : View.GONE);
+    }
+
     /** Build a fresh RemoteViews from the retained display state and push it to the LiveCard. A
      *  fresh instance each push is deliberate: a reused RemoteViews accumulates every bitmap and
      *  action in internal caches and re-parcels them on each setViews, which on the small Glass
      *  heap grew unbounded until decode OOM'd (glass-nav). Must be called on the render thread. */
     private void renderViews() {
         RemoteViews v = new RemoteViews(getPackageName(), R.layout.livecard_nav);
-        v.setFloat(R.id.instruction, "setTextSize", dispTextSize);
-        v.setTextViewText(R.id.instruction, dispInstruction);
-        v.setTextViewText(R.id.distance, dispDistance);
+        applyCorner(v, R.id.corner_top_left_dark, R.id.corner_top_left_light, dispTopLeft);
+        applyCorner(v, R.id.corner_top_right_dark, R.id.corner_top_right_light, dispTopRight);
+        applyCorner(v, R.id.corner_bottom_left_dark, R.id.corner_bottom_left_light, dispBottomLeft);
+        applyCorner(v, R.id.corner_bottom_right_dark, R.id.corner_bottom_right_light, dispBottomRight);
+        v.setFloat(R.id.status, "setTextSize", dispTextSize);
+        v.setTextViewText(R.id.status, dispStatus);
+        v.setViewVisibility(R.id.status, dispStatus.isEmpty() ? View.GONE : View.VISIBLE);
         if (snippetBlack || snippetBuffer == null) {
             v.setImageViewResource(R.id.snippet, android.R.color.black);
         } else {
@@ -365,7 +442,7 @@ public class NavLiveCardService extends Service {
         if (renderHandler != null) renderHandler.post(() -> {
             if (views == null) return;
             dispTextSize = 22f;
-            dispInstruction = "";
+            dispStatus = "";
             renderViews();
         });
     }
@@ -378,11 +455,14 @@ public class NavLiveCardService extends Service {
         if (renderHandler != null) renderHandler.post(() -> {
             if (views == null) return;
             renderHandler.removeCallbacks(renderPendingRunnable);
-            // Oversize the instruction TextView so DISCONNECTED reads at a glance from the riding
+            // Oversize the status TextView so DISCONNECTED reads at a glance from the riding
             // position; renderPendingFrame resets it back to 22sp on the next nav update.
             dispTextSize = 48f;
-            dispInstruction = "DISCONNECTED";
-            dispDistance = "";
+            dispStatus = "DISCONNECTED";
+            dispTopLeft = "";
+            dispTopRight = "";
+            dispBottomLeft = "";
+            dispBottomRight = "";
             snippetBlack = true;
             renderViews();
             if (liveCard != null) {

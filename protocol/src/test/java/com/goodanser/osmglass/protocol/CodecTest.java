@@ -110,12 +110,18 @@ class CodecTest {
     }
 
     @Test void roundTripDisplayConfig() throws Exception {
-        for (Packet.DisplayConfig.Field top : Packet.DisplayConfig.Field.values()) {
-            for (Packet.DisplayConfig.Field bot : Packet.DisplayConfig.Field.values()) {
-                for (boolean mute : new boolean[] { false, true }) {
-                    Packet.DisplayConfig in = new Packet.DisplayConfig(top, bot, mute);
-                    assertThat(Codec.decode(Codec.encode(in))).isEqualTo(in);
-                }
+        Packet.DisplayConfig.Field[] fields = Packet.DisplayConfig.Field.values();
+        // Exhaustively crossing all four corners is fields^4 — keep it bounded by pairing each
+        // corner with a different field and sweeping the start index across the enum.
+        for (int i = 0; i < fields.length; i++) {
+            for (boolean mute : new boolean[] { false, true }) {
+                Packet.DisplayConfig in = new Packet.DisplayConfig(
+                    fields[i],
+                    fields[(i + 1) % fields.length],
+                    fields[(i + 2) % fields.length],
+                    fields[(i + 3) % fields.length],
+                    mute);
+                assertThat(Codec.decode(Codec.encode(in))).isEqualTo(in);
             }
         }
     }
