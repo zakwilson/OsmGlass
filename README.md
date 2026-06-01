@@ -1,8 +1,8 @@
 # OsmGlass
 
-A cycling navigator for Google Glass XE-C (Android 4.4 / API 19).
+Turn-by-turn navigation for Google Glass XE-C (Android 4.4 / API 19).
 
-A modern Android phone runs a **fork of [OsmAnd](https://github.com/osmandapp/OsmAnd)** — it does
+A modern Android phone runs a **[fork of OsmAnd](https://github.com/zakwilson/OsmAnd)** — it does
 routing, search, offline map data, and turn-by-turn voice. A small in-app plugin (`GlassNav`)
 renders a map snippet for each upcoming turn and pushes per-turn bundles plus a live position/ETA
 feed to Glass over Bluetooth. The Glass app is a thin GDK LiveCard that surfaces the snippet,
