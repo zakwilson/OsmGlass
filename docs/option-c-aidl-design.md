@@ -352,7 +352,6 @@ arm device:
 ```bash
 # from $rootDir/OsmAnd
 ./gradlew :OsmAnd:assembleGlassnavOpengldebugArmonlyDebug   # both arm ABIs, debug
-./gradlew :OsmAnd:assembleGlassnavOpengldebugFatDebug       # all ABIs, debug
 ./gradlew :OsmAnd:assembleGlassnavOpenglArmonlyRelease      # release build
 ```
 
@@ -360,6 +359,18 @@ Use the `opengldebug` core variant for development — it skips the 3D OpenGL
 release packaging step. `armonly` packs both 32-bit and 64-bit ARM into one
 APK without adding x86, which keeps APK size manageable for Android phones
 while remaining wide-device-compatible.
+
+**Do not build the `fat` (all-ABIs) variant for development.** With the
+unstripped debug `libOsmAndCoreWithJNI.so` (~0.5 GB per ABI), the universal
+`assembleGlassnavOpengldebugFatDebug` APK is ~2.04 GiB — just past the 2 GiB
+(`Integer.MAX_VALUE`) offset limit in AGP's incremental zip packager
+(`zipflinger`). That makes `packageGlassnavOpengldebugFatDebug` fail
+intermittently (~1 in 5 builds) with `integer overflow`; the boundary-crossing
+entry only lands on the overflowing path on some incremental layouts, hence the
+flakiness. `armonly` (1.16 GiB) stays well under the limit and is the only ABI
+slice the target phones need. `fat` is only useful for running the phone app on
+an x86/x86_64 emulator — if you need that, build the `x86` variant separately
+rather than the universal `fat` APK.
 
 ### Signing
 
