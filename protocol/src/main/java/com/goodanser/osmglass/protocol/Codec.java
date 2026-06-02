@@ -135,6 +135,9 @@ public final class Codec {
                 out.writeByte(d.bottomLeft.ordinal() & 0xff);
                 out.writeByte(d.bottomRight.ordinal() & 0xff);
                 out.writeByte(d.muteTts ? 1 : 0);
+                // screenWakeSec is an additive extension after muteTts. Older receivers stop after
+                // the muteTts byte and decode screenWakeSec as DEFAULT_SCREEN_WAKE_SEC.
+                out.writeShort(d.screenWakeSec & 0xffff);
                 break;
             }
             case TURN_ALERT: {
@@ -219,12 +222,17 @@ public final class Codec {
                 int brOrd = in.readUnsignedByte();
                 // muteTts flag is appended; payloads without it decode as muteTts=false.
                 boolean muteTts = in.available() > 0 && in.readUnsignedByte() != 0;
+                // screenWakeSec (uint16) is appended after muteTts; payloads without it decode as
+                // the default timeout.
+                int screenWakeSec = in.available() >= 2
+                    ? in.readUnsignedShort()
+                    : Packet.DisplayConfig.DEFAULT_SCREEN_WAKE_SEC;
                 return new Packet.DisplayConfig(
                     Packet.DisplayConfig.Field.fromCode(tlOrd),
                     Packet.DisplayConfig.Field.fromCode(trOrd),
                     Packet.DisplayConfig.Field.fromCode(blOrd),
                     Packet.DisplayConfig.Field.fromCode(brOrd),
-                    muteTts);
+                    muteTts, screenWakeSec);
             }
             case TURN_ALERT: {
                 long routeId = in.readInt() & 0xffffffffL;

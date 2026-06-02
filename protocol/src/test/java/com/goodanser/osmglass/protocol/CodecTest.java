@@ -113,6 +113,7 @@ class CodecTest {
         Packet.DisplayConfig.Field[] fields = Packet.DisplayConfig.Field.values();
         // Exhaustively crossing all four corners is fields^4 — keep it bounded by pairing each
         // corner with a different field and sweeping the start index across the enum.
+        int[] wakeSecs = { 0, 15, 60, 0xffff };
         for (int i = 0; i < fields.length; i++) {
             for (boolean mute : new boolean[] { false, true }) {
                 Packet.DisplayConfig in = new Packet.DisplayConfig(
@@ -120,10 +121,28 @@ class CodecTest {
                     fields[(i + 1) % fields.length],
                     fields[(i + 2) % fields.length],
                     fields[(i + 3) % fields.length],
-                    mute);
+                    mute,
+                    wakeSecs[i % wakeSecs.length]);
                 assertThat(Codec.decode(Codec.encode(in))).isEqualTo(in);
             }
         }
+    }
+
+    @Test void displayConfigDecodesLegacyPayloadWithoutScreenWake() throws Exception {
+        // Synthesize a payload with the four corner ordinals + muteTts byte but no trailing
+        // screenWakeSec — an older phone. It should decode to the default timeout.
+        java.io.ByteArrayOutputStream payload = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(payload);
+        out.writeByte(Packet.DisplayConfig.Field.TURN_INSTRUCTION.ordinal());
+        out.writeByte(Packet.DisplayConfig.Field.NONE.ordinal());
+        out.writeByte(Packet.DisplayConfig.Field.DISTANCE_TO_TURN.ordinal());
+        out.writeByte(Packet.DisplayConfig.Field.NONE.ordinal());
+        out.writeByte(1); // muteTts
+        out.flush();
+        Packet.DisplayConfig decoded =
+            (Packet.DisplayConfig) Codec.decodePayload(PacketType.DISPLAY_CONFIG, payload.toByteArray());
+        assertThat(decoded.muteTts).isTrue();
+        assertThat(decoded.screenWakeSec).isEqualTo(Packet.DisplayConfig.DEFAULT_SCREEN_WAKE_SEC);
     }
 
     @Test void roundTripTurnAlert() throws Exception {

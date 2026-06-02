@@ -79,12 +79,14 @@ public final class PacketDispatcher implements Transport.Listener {
         } else if (p instanceof Packet.DisplayConfig) {
             Packet.DisplayConfig dc = (Packet.DisplayConfig) p;
             Log.i(TAG, "DISPLAY_CONFIG tl=" + dc.topLeft + " tr=" + dc.topRight
-                + " bl=" + dc.bottomLeft + " br=" + dc.bottomRight + " muteTts=" + dc.muteTts);
+                + " bl=" + dc.bottomLeft + " br=" + dc.bottomRight + " muteTts=" + dc.muteTts
+                + " screenWakeSec=" + dc.screenWakeSec);
             topLeft = dc.topLeft;
             topRight = dc.topRight;
             bottomLeft = dc.bottomLeft;
             bottomRight = dc.bottomRight;
             muteTts = dc.muteTts;
+            service.setScreenWakeTimeout(dc.screenWakeSec);
         } else if (p instanceof Packet.TurnBundle) {
             Packet.TurnBundle tb = (Packet.TurnBundle) p;
             Log.d(TAG, "TURN_BUNDLE #" + tb.turnIndex + " " + tb.kind + " (" + tb.pngBytes.length + "B)");

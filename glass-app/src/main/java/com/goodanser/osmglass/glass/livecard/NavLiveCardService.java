@@ -53,6 +53,13 @@ public class NavLiveCardService extends Service {
     private TtsSpeaker speaker;
     private PowerManager.WakeLock screenWake;
     private PowerManager.WakeLock disconnectWake;
+    /** How long to hold {@link #screenWake} after waking for an approaching turn, in ms; 0 means no
+     *  timeout (hold until the turn is passed). Pushed from the phone via DisplayConfig
+     *  ({@link PacketDispatcher#setScreenWakeTimeout}); defaults to the protocol's default so the
+     *  screen is bounded even before the first DisplayConfig arrives. Read on the reader thread in
+     *  {@link #onApproachingTurn}, written from the same thread — volatile for visibility. */
+    private volatile long screenWakeMs =
+        Packet.DisplayConfig.DEFAULT_SCREEN_WAKE_SEC * 1000L;
     private int approachingTurnIndex = -1;
     private boolean hasNavContent = false;
     private BroadcastReceiver screenOnReceiver;
@@ -496,11 +503,32 @@ public class NavLiveCardService extends Service {
         }
         if (screenWake != null && !screenWake.isHeld()) {
             try {
-                screenWake.acquire();
+                // A configurable timeout (screenWakeMs) bounds how long the display stays bright per
+                // turn: once it elapses the lock auto-releases and the screen dims on its normal
+                // timeout, even if the turn isn't passed yet (e.g. the rider stopped within the
+                // approach radius). 0 means hold indefinitely until onTurnPassed. The per-turn
+                // idempotence guard above means this fires at most once per turn approach; a glance-up
+                // re-surfaces the card via the ACTION_SCREEN_ON receiver.
+                long wakeMs = screenWakeMs;
+                if (wakeMs > 0) {
+                    screenWake.acquire(wakeMs);
+                } else {
+                    screenWake.acquire();
+                }
             } catch (Throwable t) {
                 Log.w(TAG, "wakeLock.acquire failed: " + t.getMessage());
             }
         }
+    }
+
+    /**
+     * Called by {@code PacketDispatcher} when a DisplayConfig arrives. Sets how long the display is
+     * held bright after waking for an approaching turn. {@code seconds <= 0}
+     * ({@link Packet.DisplayConfig#SCREEN_WAKE_NO_TIMEOUT}) restores the unbounded hold-until-passed
+     * behavior. Takes effect on the next {@link #onApproachingTurn}.
+     */
+    public void setScreenWakeTimeout(int seconds) {
+        screenWakeMs = seconds > 0 ? seconds * 1000L : 0L;
     }
 
     /**

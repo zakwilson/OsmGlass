@@ -177,6 +177,14 @@ public abstract class Packet {
      * applies it to subsequent updates. A corner set to {@link Field#NONE} renders blank.
      */
     public static final class DisplayConfig extends Packet {
+        /** Default screen-on timeout (seconds) when the phone hasn't specified one — also what an
+         *  older phone's DisplayConfig (which lacks the field) decodes to. Bounds how long Glass
+         *  holds the display bright after waking for an approaching turn. */
+        public static final int DEFAULT_SCREEN_WAKE_SEC = 15;
+        /** {@link #screenWakeSec} value meaning "no timeout": hold the screen on for the whole
+         *  approach until the turn is passed (the original, unbounded behavior). */
+        public static final int SCREEN_WAKE_NO_TIMEOUT = 0;
+
         public enum Field {
             TURN_INSTRUCTION,
             DISTANCE_TO_TURN,
@@ -199,6 +207,12 @@ public abstract class Packet {
         /** If true, the Glass dispatcher suppresses all TTS announcements. Lets the user rely on
          *  OsmAnd's phone-side voice (e.g. via bone-conduction headphones) without doubling up. */
         public final boolean muteTts;
+        /** How long (seconds) Glass keeps the display bright after waking for an approaching turn,
+         *  before letting it dim on its normal timeout — even if the turn hasn't been passed yet.
+         *  Bounds battery drain when a turn is still far away or the rider stops within the approach
+         *  radius. {@link #SCREEN_WAKE_NO_TIMEOUT} (0) restores the unbounded hold-until-passed
+         *  behavior. */
+        public final int screenWakeSec;
 
         public DisplayConfig(Field topLeft, Field topRight, Field bottomLeft, Field bottomRight) {
             this(topLeft, topRight, bottomLeft, bottomRight, false);
@@ -206,11 +220,17 @@ public abstract class Packet {
 
         public DisplayConfig(Field topLeft, Field topRight, Field bottomLeft, Field bottomRight,
                              boolean muteTts) {
+            this(topLeft, topRight, bottomLeft, bottomRight, muteTts, DEFAULT_SCREEN_WAKE_SEC);
+        }
+
+        public DisplayConfig(Field topLeft, Field topRight, Field bottomLeft, Field bottomRight,
+                             boolean muteTts, int screenWakeSec) {
             this.topLeft = Objects.requireNonNull(topLeft);
             this.topRight = Objects.requireNonNull(topRight);
             this.bottomLeft = Objects.requireNonNull(bottomLeft);
             this.bottomRight = Objects.requireNonNull(bottomRight);
             this.muteTts = muteTts;
+            this.screenWakeSec = screenWakeSec;
         }
 
         @Override public PacketType type() { return PacketType.DISPLAY_CONFIG; }
@@ -220,14 +240,15 @@ public abstract class Packet {
             DisplayConfig d = (DisplayConfig) o;
             return topLeft == d.topLeft && topRight == d.topRight
                 && bottomLeft == d.bottomLeft && bottomRight == d.bottomRight
-                && muteTts == d.muteTts;
+                && muteTts == d.muteTts && screenWakeSec == d.screenWakeSec;
         }
         @Override public int hashCode() {
-            return Objects.hash(topLeft, topRight, bottomLeft, bottomRight, muteTts);
+            return Objects.hash(topLeft, topRight, bottomLeft, bottomRight, muteTts, screenWakeSec);
         }
         @Override public String toString() {
             return "DisplayConfig(tl=" + topLeft + ", tr=" + topRight + ", bl=" + bottomLeft
-                + ", br=" + bottomRight + ", muteTts=" + muteTts + ")";
+                + ", br=" + bottomRight + ", muteTts=" + muteTts
+                + ", screenWakeSec=" + screenWakeSec + ")";
         }
     }
 
